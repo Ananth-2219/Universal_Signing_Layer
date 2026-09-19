@@ -1,31 +1,38 @@
 import type { Address, Hex } from 'viem';
 
-/** A CAIP-2 namespace:reference; runtime validation belongs to chain adapters. */
-export type ChainId = `${string}:${string}`;
-
+export type ChainId = `eip155:${string}`;
 export interface Intent {
   chainId: ChainId;
-  to: string;
+  to: Address;
   /** Smallest asset unit; never a floating-point quantity. */
   amount: bigint;
-  asset: 'native' | string;
+  asset: 'native' | Address;
   data?: Hex;
 }
-
-/** Phase 1's ABI format is EVM-specific. All numeric fields encode as uint256. */
-export interface Grant {
-  owner: Address;
-  chainId: bigint;
-  sessionKey: Address;
+export interface EIP712ChainDomain { chainId: bigint; verifyingContract: Address }
+export interface GrantLimits {
   perTxLimit: bigint;
   budget: bigint;
   windowSeconds: bigint;
-  /** Unix seconds. */
+  /** Unix seconds: session valid only while expiry > now. */
   expiry: bigint;
-  nonce: bigint;
 }
-
+export interface MandateGrant extends GrantLimits {
+  domain: EIP712ChainDomain;
+  sessionKey: Address;
+}
 export interface Mandate {
-  owner: Address;
-  grants: Grant[];
+  grants: MandateGrant[];
+  /** Unique mandate ID, not a sequential counter. */
+  nonce: bigint;
+  /** Last submission time in Unix seconds, inclusive. */
+  deadline: bigint;
+}
+/** Values returned by the application's ERC-5267 eip712Domain(). */
+export interface ApplicationDomain {
+  name: string;
+  version: string;
+  chainId: bigint;
+  verifyingContract: Address;
+  salt: Hex;
 }

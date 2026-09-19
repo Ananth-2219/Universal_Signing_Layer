@@ -4,3 +4,5 @@
 node_modules/
 dist/
 coverage/
+contracts/out/
+contracts/cache/

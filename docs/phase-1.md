@@ -1,72 +1,111 @@
-# Phase 1: core types and mandate format
+# Phase 1 rework: readable array mandates
 
-Built `sdk/src/core` with TypeScript intent, grant, and mandate types;
-OpenZeppelin-compatible grant leaves and Merkle proofs; and viem EIP-712 digest,
-signing, and EOA verification helpers. Added fixed public vectors in JSON and a
-copyable Solidity fixture, plus a dedicated test-key regeneration script.
-See [encoding.md](encoding.md) for the exact wire format and unresolved policy
-decisions that Phase 5 must address.
+The SDK now signs the full EIP-712 `Mandate` array following the application schema
+in [encoding.md](encoding.md), based on ERC-7964 (draft, checked 2026-09-19).
+Each grant binds a chain and account to a session key and limits. One unique nonce
+and one submission deadline belong to the entire mandate. Session expiry stays
+inside each grant.
 
-## Running the checks
+## What changed
 
-From the repository root, using a Linux Node/npm installation when inside WSL:
+Added manual ABI hashes cross-checked against viem, array order binding, a strict
+ERC-7964 envelope encoder/decoder, and typed verification failure reasons. The
+verifier recomputes the local grant, uses the header's ERC-5267 domain field mask,
+checks the caller's domain-provider address, and verifies the signed nonce and
+deadline. Time is always injected: deadline is inclusive, expiry exclusive.
+
+Kept bigint amount precision, uint256/address validation, the dedicated ignored
+TEST_VECTOR_KEY, fixed public fixtures, and a regeneration script (now named
+`sdk/scripts/regen-vector.ts`). Added a Solidity parity test with no account
+contract, external Solidity libraries, private key, or network transaction.
+
+Removed:
+
+- `@openzeppelin/merkle-tree` and its dependency subtree.
+- `grant.ts`, `grantLeaf`, `buildMerkleTree`, and their exports.
+- Leaves, roots, proofs, the old root-only typed payload, and dependent tests/docs.
+- Old per-grant owner and nonce fields; nonce now belongs to the mandate.
+- `regenerate-vectors.ts`, replaced by `regen-vector.ts`.
+- The old Solidity fixture helpers, replaced by public array-mandate constants.
+
+Grant order now matters. Duplicate chain/account pairs are rejected; distinct
+accounts on the same chain are allowed. Intent types are scoped to EVM addresses
+and `eip155` chain IDs for this phase.
+
+## Running checks
+
+From the repository root:
 
 ```sh
 npm ci
 npm test
-npm run typecheck
+npx tsc --noEmit
+forge test
 ```
 
-The SDK pins viem 2.56.8, @openzeppelin/merkle-tree 1.0.8, TypeScript 5.9.3,
-and Vitest 3.2.7. Implementation checked their installed source APIs, including
-OpenZeppelin's leaf/node hashes and viem account signing. Tests were run on
-Node 18.19.1. Node must support `--import` for the optional regeneration script.
+`npm run typecheck` is also available. Dependencies used: viem 2.56.8, TypeScript
+5.9.3, Vitest 3.2.7; Solidity parity uses Foundry 1.8.3 and solc 0.8.30. Their
+installed APIs were inspected before use. Root `tsconfig.json` makes the requested
+`npx tsc --noEmit` work from the repository root. `foundry.toml` selects
+`contracts/test`, with build outputs/cache ignored.
 
-This workspace initially resolved `npm` to Windows while `node` resolved to
-Linux. Until the shell uses a Linux npm, these direct commands work after
-dependencies have been installed:
+In this WSL workspace, npm/npx initially resolve to Windows binaries while Node
+is Linux. Use a Linux npm on PATH. Equivalent direct checks after installing
+packages are:
 
 ```sh
 node node_modules/vitest/vitest.mjs run --root sdk
-node node_modules/typescript/bin/tsc --noEmit -p sdk/tsconfig.json
-node --import tsx sdk/scripts/regenerate-vectors.ts
+node node_modules/typescript/bin/tsc --noEmit
+$HOME/.foundry/bin/forge test
 ```
 
-Public verification needs no `.env` or RPC. The exact signing test additionally
-reads `TEST_VECTOR_KEY` from root `.env`; it is skipped if that key is absent.
-The local test run includes that test. Regeneration creates a new dedicated
-test-only key and updates the fixtures; follow the deliberate regeneration
-process in [encoding.md](encoding.md#fixed-vectors-and-regeneration).
-No deployments, network transactions, or funds are involved. Foundry execution
-is deferred to the contract phase; no Foundry toolchain is installed here.
+The Solidity suite has four tests: grant hashes, full digest, owner recovery, and
+both envelopes. The Vitest suite covers fixed public outputs, independent viem
+parity, every field of both grants, order/chain binding, malformed envelopes,
+signature boundaries, all ERC-5267 masks, application matching, uint256 bounds,
+address casing, exact time boundaries, and private signing reproduction.
 
-Tests cover fixed leaves/root/proofs/digest/signature, independent OpenZeppelin
-encoding, the explicit Solidity digest formula, all three-grant permutations,
-single-leaf trees, equivalent address casing, mutation and proof tampering,
-all uint256 boundaries, malformed addresses and roots, duplicate chain IDs,
-mixed owners, changed domains, and incorrect signatures.
+Final validation: **84 Vitest tests passed**, **4 Foundry tests passed**, and
+`npx tsc --noEmit` passed. No tests were skipped in the local run. A separate copy
+without `.env` passed **83 tests and skipped only private signature reproduction**,
+with an explicit missing-TEST_VECTOR_KEY message. Foundry needed no key.
 
-Dependency installation reports six moderate advisories in the Merkle tree's
-transitive dependencies and Vitest. The initial critical Vitest advisory was
-removed by updating to 3.2.7. This prototype uses offline `vitest run`, with no
-Vitest UI server. The dependency advisories remain unresolved and should be
-reviewed when updating the toolchain.
+No key is needed for public TypeScript tests or Foundry. When TEST_VECTOR_KEY is
+missing, the single private reproduction test reports why it is skipped. Follow
+[the regeneration steps](encoding.md#public-vectors-and-regeneration) only when
+intentionally updating the public vectors. No transactions are sent.
+
+The Merkle dependency removal reduced the npm audit report to two moderate
+Vitest-related advisories. They remain unresolved; tests use offline `vitest run`.
+
+## Assumptions and boundaries
+
+The approved correction is that changing nonce/deadline changes the main struct
+hash and digest, not the grants' array hash. They are required verification
+arguments because the envelope does not carry them. The on-chain registration
+entry point and nonce update ordering are specified in encoding.md.
+
+Application-domain metadata is caller-supplied in the offline SDK; the future
+contract must fetch it from the header's application. Expected local chain and
+account identity must come from trusted execution context. This phase verifies
+EOA signatures, not contract-wallet signatures. The decoder deliberately requires
+canonical ABI layout, rejecting extra bytes, gaps, or nonzero padding.
+
+Real wallet display quality is wallet-dependent; this phase supplies structured
+fields but does not implement or test a wallet UI. EVM execution, rolling budgets,
+nonce storage, and fresh consent for over-limit actions remain later work.
 
 ## Plain-language explanation
 
-A grant is a permission slip for one chain: who owns the account, which temporary
-key may act, how much it may spend, and when permission ends. A Merkle tree puts
-several permission slips into one bundle with a short fingerprint called its
-root. A proof lets a chain check that its permission slip belongs to that bundle
-without receiving every other slip.
+A grant is a permission slip: which chain and account a temporary key may use,
+how much it may spend, and when its permission ends. The master key signs the
+whole list of permission slips, so a wallet can show their fields before consent.
 
-The master key signs this root with a named, versioned message format. We leave
-the chain and verifier address out of that message's domain so the exact same
-consent signature can be checked on multiple chains. Each permission slip still
-contains its own chain ID. This is one consent signature verified on multiple
-chains; session keys separately sign ordinary transactions.
+Each chain receives its own slip, fingerprints of all slips, and the same master
+signature. It computes its own slip's fingerprint, checks that it occupies the
+right place in the list, and reconstructs the signed message. The nonce labels
+this consent; the deadline says when it must be submitted. Expiry separately says
+when the temporary key must stop working.
 
-This phase only builds and checks the permission bundle. Later contracts must
-track spending, enforce expiry, reject reused or revoked permissions, and require
-new master consent when an action exceeds the limits. The current grant format
-uses EVM addresses; Solana's representation still needs an explicit design.
+This is one consent signature verified on multiple chains. The session key still
+signs each ordinary transaction, and later contracts must enforce spending limits.

@@ -1,199 +1,251 @@
-# USL mandate encoding, version 1
+# USL array mandate encoding, version 1
 
-This document is the byte-level contract between the SDK and Phase 5 Solidity.
-The SDK is in `sdk/src/core`. Public fixed vectors are in
-`sdk/test/vectors/mandate.json`; `docs/vectors/Phase1Vector.sol` contains the same
-inputs, hashes, proofs, and signature as a copyable Solidity library.
-Neither file contains a private key. JSON integers are decimal strings to avoid
-JavaScript number precision loss; TypeScript uses `bigint`.
+Reference checked **2026-09-19**: [ERC-7964 — Crosschain EIP-712 Signatures](https://eips.ethereum.org/EIPS/eip-7964).
+It is a **DRAFT**, not a finalized standard. This document specifies the USL
+application schema requested for this prototype. Scope: EVM chains only.
+[ERC-5267](https://eips.ethereum.org/EIPS/eip-5267) defines the domain field mask.
 
-## Types and scope
+## Types and exact type strings
 
-`Intent` contains a CAIP-2 `chainId` (for example `eip155:11155111`), a chain-native
-destination string, an `amount` in the smallest asset unit, an `asset` string
-(`native` or a chain-native token address), and optional hex `data`.
-The template-literal chain ID type requires a colon, but is not a full runtime
-CAIP-2 validator. Intents are not included in this mandate's signed payload.
+All numeric fields are `uint256` on the wire and `bigint` in TypeScript. Addresses
+are 20 bytes. Address casing is tolerated and normalized for viem encoding.
+JSON fixtures store integers as decimal strings to avoid precision loss.
 
-`Grant` uses the ABI below. `Mandate` is `{ owner, grants: Grant[] }`.
-Its top-level owner is convenience metadata: each leaf commits its own owner.
-`buildMerkleTree` requires a nonempty list, the same owner for every grant, and
-unique numeric chain IDs. It rejects invalid addresses, non-bigint integers,
-negative integers, and integers larger than `2**256 - 1`.
+```text
+EIP712Domain:
+  name: string
+  version: string
 
-Phase 1 implements the requested EVM grant format. Its numeric chain IDs and
-20-byte session-key addresses do **not** yet describe Solana's CAIP-2 reference or
-32-byte ed25519 keys. A later phase must explicitly define that representation
-and its on-chain verification; no implicit Solana encoding is assumed here.
+Mandate:
+  grants: MandateGrant[]
+  nonce: uint256
+  deadline: uint256
 
-## Grant leaf: exact field order
+MandateGrant:
+  domain: EIP712ChainDomain
+  sessionKey: address
+  perTxLimit: uint256
+  budget: uint256
+  windowSeconds: uint256
+  expiry: uint256
 
-| Position | Name | Solidity ABI type | Meaning |
-| --- | --- | --- | --- |
-| 0 | owner | address | Master key's Ethereum address |
-| 1 | chainId | uint256 | EVM chain ID, not a CAIP-2 string |
-| 2 | sessionKey | address | EVM session signer |
-| 3 | perTxLimit | uint256 | Maximum amount per transaction, smallest unit |
-| 4 | budget | uint256 | Amount budget over the policy window, smallest unit |
-| 5 | windowSeconds | uint256 | Window duration in seconds |
-| 6 | expiry | uint256 | Unix timestamp in seconds |
-| 7 | nonce | uint256 | Policy replay/revocation nonce |
-
-Encode eight standard ABI words: 256 bytes total. Addresses are 20-byte values
-left-padded to 32 bytes; unsigned integers use 32-byte big-endian encoding.
-Do not use packed encoding, serialize CAIP-2 strings, narrow timestamp fields to
-`uint64`, or include a grant type hash.
-
-```solidity
-bytes32 leaf = keccak256(bytes.concat(keccak256(abi.encode(
-    grant.owner,
-    grant.chainId,
-    grant.sessionKey,
-    grant.perTxLimit,
-    grant.budget,
-    grant.windowSeconds,
-    grant.expiry,
-    grant.nonce
-))));
+EIP712ChainDomain:
+  chainId: uint256
+  verifyingContract: address
 ```
 
-The outer hash consumes the raw 32-byte inner hash, not its hexadecimal text.
-This is OpenZeppelin's double-hashed standard leaf format, which distinguishes
-leaf preimages from internal-node preimages.
-[OpenZeppelin Merkle tree documentation](https://github.com/OpenZeppelin/merkle-tree#standard-merkle-trees).
+`primaryType` is `Mandate`. The signing domain is exactly
+`{ name: 'USLMandate', version: '1' }`: no `chainId`, `verifyingContract`, or `salt`
+keys, including no zero-valued placeholders. Every grant exposes its target under
+exactly `domain.chainId`. `domain.verifyingContract` is the user's MandateAccount
+on that chain. `sessionKey` is an EVM signing address. The owner is recovered from
+the signature and compared to the account's owner; it is not a grant field.
 
-## Tree and proofs
+These exact UTF-8 type strings have no spaces after commas. Nested dependencies
+are appended alphabetically after the primary type:
 
-`StandardMerkleTree.of(values, encoding, { sortLeaves: true })` defines the tree.
-Leaves are sorted by hash before OpenZeppelin constructs its complete binary
-tree. Every internal node is `keccak256(concat(min(a,b), max(a,b)))`, sorting
-32-byte child hashes lexicographically. Do not substitute a tree that duplicates
-odd leaves or promotes nodes using a different layout.
+```text
+Mandate(MandateGrant[] grants,uint256 nonce,uint256 deadline)EIP712ChainDomain(uint256 chainId,address verifyingContract)MandateGrant(EIP712ChainDomain domain,address sessionKey,uint256 perTxLimit,uint256 budget,uint256 windowSeconds,uint256 expiry)
 
-Input grant order does not affect the root. Proofs contain sibling hashes in
-leaf-to-root order and can be passed directly to OpenZeppelin `MerkleProof.verify`.
-A one-grant tree has its leaf as its root and an empty proof. `getProof(grant)`
-uses encoded values rather than object identity, accepts equivalent address
-casing, and throws when the grant is absent.
+MandateGrant(EIP712ChainDomain domain,address sessionKey,uint256 perTxLimit,uint256 budget,uint256 windowSeconds,uint256 expiry)EIP712ChainDomain(uint256 chainId,address verifyingContract)
 
-## EIP-712: exact domain and message
+EIP712ChainDomain(uint256 chainId,address verifyingContract)
+
+EIP712Domain(string name,string version)
+```
+
+Tests compare the manual hashes against viem's `hashStruct`, `hashDomain`, and
+`hashTypedData`, whose installed implementation sorts dependent type names.
+
+## Manual hash construction
+
+`keccak256` always consumes raw bytes, not hexadecimal text. `abi.encode` pads
+addresses on the left and encodes unsigned integers as 32-byte big-endian words.
+Each TYPEHASH below is the keccak256 hash of the corresponding type string above.
+The implementation uses viem's ABI encoder and keccak256; it implements no crypto
+primitive itself.
+
+```solidity
+chainDomainHash = keccak256(abi.encode(
+    CHAIN_DOMAIN_TYPEHASH, grant.domain.chainId, grant.domain.verifyingContract
+));
+grantStructHash = keccak256(abi.encode(
+    GRANT_TYPEHASH, chainDomainHash, grant.sessionKey,
+    grant.perTxLimit, grant.budget, grant.windowSeconds, grant.expiry
+));
+arrayHash = keccak256(abi.encodePacked(structsArray));
+mandateStructHash = keccak256(abi.encode(
+    MANDATE_TYPEHASH, arrayHash, nonce, deadline
+));
+domainSeparator = keccak256(abi.encode(
+    keccak256("EIP712Domain(string name,string version)"),
+    keccak256("USLMandate"), keccak256("1")
+));
+digest = keccak256(abi.encodePacked(hex"1901", domainSeparator, mandateStructHash));
+```
+
+`structsArray` contains every grant struct hash in the original array order. Its
+hash preimage is `32 * grants.length` bytes with no count or offset prefix.
+Swapping grants changes the signed digest. Changing nonce or deadline changes the
+mandate struct hash and digest, **but leaves the grant and array hashes unchanged**.
+This corrects the original test wording, as approved by the user.
+
+`signMandate(mandate, account)` passes the full typed data to a viem LocalAccount's
+`signTypedData`. The fixture uses deterministic secp256k1 signing. Signatures in
+this prototype are 65-byte `r || s || v`, with `v` equal to 27 or 28. EOA recovery
+is supported; ERC-1271 and compact 64-byte signatures are outside this phase.
+
+## Construction and validation
+
+`createMandate({ sessionKey, chains, limits, nonce, deadline, now })` accepts one
+shared session key, `chains: [{ chainId, account }]`, and shared limits
+`{ perTxLimit, budget, windowSeconds, expiry }`. It creates one grant per entry
+and validates times against the supplied `now`. Callers may also construct a
+Mandate directly with different per-chain limits.
+
+The codec requires at least one grant, valid addresses, uint256 bigints, and no
+duplicate `(chainId, verifyingContract)` pair. Different accounts on the same
+chain are allowed. `validateMandate(mandate, now)` checks all grants' times;
+`validateGrant(grant, now)` checks an individual session. Encoding and hashing
+validate structure but deliberately have no wall-clock dependency, so historical
+fixtures remain reproducible. Use explicit time validation before requesting a
+signature. Zero amounts/windows can be encoded; meaningful spending-policy
+validation is a later contract concern.
+
+## Envelope bytes
+
+The envelope is canonical Solidity ABI encoding:
+
+```solidity
+abi.encode(bytes32 header, bytes32[] structsArray, bytes signature)
+```
+
+| Header byte offset | Length | Value |
+| --- | --- | --- |
+| 0 | 9 | Magic `0x796479647964796479` |
+| 9 | 1 | ERC-5267 fields mask; issuance uses `0x03` |
+| 10 | 2 | `structIndex`, uint16 big-endian |
+| 12 | 20 | `application`, ERC-5267 domain provider address |
+
+`encodeEnvelope` finds the unique grant matching `(chainId, verifyingContract)`.
+Indices must fit uint16. The header is packed; the enclosing tuple uses normal
+ABI encoding. The three head words are header, array offset, and signature offset.
+The array offset is 96. The array tail is its length followed by hashes. The
+signature offset is `128 + 32 * structsArray.length`, followed by signature length,
+bytes, and zero padding to a 32-byte boundary.
+
+`decodeEnvelope` requires this canonical layout: valid hex and magic, bounded
+lengths/offsets, nonempty array, in-range index, no overlaps/gaps, no truncated data,
+no nonzero padding, and no trailing data. It bounds arithmetic before invoking
+viem's decoder. This is deliberately stricter than accepting arbitrary decodable
+ABI offsets. Reserved field-mask bits above bit 4 are rejected. Signature byte
+length and `v` are validated by the verifier; a complete ABI `bytes` value can
+parse successfully but still contain an invalid EOA signature.
+
+The envelope **does not contain nonce or deadline**. They must accompany it as
+separate arguments. The array hashes also do not disclose other grants' raw
+fields; the signing wallet receives the full array before signing.
+
+## Verification and ERC-5267 domain handling
 
 ```typescript
-{
-  domain: { name: 'USLMandate', version: '1' },
-  types: { Mandate: [{ name: 'root', type: 'bytes32' }] },
-  primaryType: 'Mandate',
-  message: { root }
-}
+verifyEnvelope({
+  envelope, expectedGrant, owner, nonce, deadline, now, application,
+  domain: { name, version, chainId, verifyingContract, salt },
+})
 ```
 
-The domain contains **only** `name` and `version`. `chainId`,
-`verifyingContract`, and `salt` are absent, not zero-valued.
-The typed struct is `Mandate(bytes32 root)`, not the TypeScript `Mandate`
-container. Each root must be exactly 32 bytes.
+`domain` holds values obtained from the application's `eip712Domain()`. The
+function is offline: the caller must fetch trustworthy metadata from that
+contract. Its `application` argument must match the header's application address.
+The function cannot independently prove where caller-supplied metadata came from.
+
+The **header**, not a caller-provided mask, determines which domain fields enter
+the separator. Supported ERC-5267 bits, in canonical order:
+
+| Bit | Mask | Field |
+| --- | --- | --- |
+| 0 | `0x01` | name |
+| 1 | `0x02` | version |
+| 2 | `0x04` | chainId |
+| 3 | `0x08` | verifyingContract |
+| 4 | `0x10` | salt |
+
+With `0x03`, only name and version are hashed. Supplied chainId, verifyingContract,
+and salt values are ignored, including for validation. Other supported masks
+change both the domain type string and its selected encoded values; modifying a
+fixture's mask invalidates its signature. The signing API always uses `0x03`.
+Domain helpers support all five standard fields to mirror the metadata flow.
+
+Verification checks local inputs and application identity, validates time,
+recomputes the selected grant hash from `expectedGrant`'s **own fields**, and
+compares it with `structsArray[structIndex]`. It rebuilds the full mandate hash
+using the received hashes plus the supplied nonce and deadline, then recovers
+and compares the owner. It returns `{ valid: true, digest, signer }` or
+`{ valid: false, reason, message }`. A wrong nonce/deadline that passes time
+validation produces `SIGNER_MISMATCH`; the signature cannot identify which
+supplied field was wrong. Invalid time produces its specific reason first.
+
+`application` supplies domain metadata; it is distinct from the grant's execution
+account. Its address is not directly signed when the top-level domain omits
+verifyingContract. Another provider with identical selected metadata yields the
+same separator. The signed per-grant verifyingContract still binds execution.
+
+## Time and nonce semantics for the future contract
+
+Both timestamps are Unix seconds. **deadline** is the last time the signature may
+be submitted; **expiry** is when that grant's session stops working. They are
+independent:
+
+```text
+submission is timely:  now <= deadline
+a session is active:   expectedGrant.expiry > now
+```
+
+Thus deadline equal to now passes; expiry equal to now fails. `verifyEnvelope`
+requires an injected uint256 bigint `now` and never reads the system clock.
+The future on-chain entry point is:
 
 ```solidity
-bytes32 domainSeparator = keccak256(abi.encode(
-    keccak256("EIP712Domain(string name,string version)"),
-    keccak256("USLMandate"),
-    keccak256("1")
-));
-bytes32 structHash = keccak256(abi.encode(
-    keccak256("Mandate(bytes32 root)"),
-    root
-));
-bytes32 digest = keccak256(abi.encodePacked(
-    hex"1901", domainSeparator, structHash
-));
+registerMandate(MandateGrant grant, uint256 nonce, uint256 deadline, bytes envelope)
 ```
 
-The final preimage is 66 bytes: two prefix bytes and two 32-byte hashes.
-Do not apply the personal-message / `eth_sign` prefix.
-OpenZeppelin's default EIP712 domain includes chain and contract information,
-so Phase 5 must deliberately reproduce the domain above rather than use its
-default domain separator unchanged.
+It will use `block.timestamp` as now, bind the local grant to `block.chainid` and
+its own account address, and compare the recovered signer with its stored owner.
+The supplied nonce is a **unique mandate ID**, not a counter. The contract must
+check it is unused, verify that exact value through the signed digest, and only
+mark it used **after verification succeeds**. It must not increment or re-read a
+changed counter while reconstructing the signature. All state changes must be
+atomic and precede any external execution. Each account tracks its own used IDs.
 
-`mandateDigest(root)` uses viem `hashTypedData`. `signMandate(root, account)`
-accepts a viem `LocalAccount` and calls its `signTypedData` method.
-The fixture uses a private-key account and a deterministic 65-byte secp256k1
-signature serialized as `r || s || v`, with low `s` and `v` of 27 or 28.
-`verifyMandateSignature(root, signature, owner)` verifies the expected EOA
-signer offline via viem `verifyTypedData`. It returns false for invalid signatures
-or an incorrect signer; a malformed root throws. Contract-wallet / ERC-1271
-verification and RPC-backed wallet clients are outside this API's current scope.
-[Viem signing](https://viem.sh/docs/actions/wallet/signTypedData) and
-[EOA verification](https://viem.sh/docs/utilities/verifyTypedData).
+This phase does not deploy the account, track used IDs, enforce rolling budgets,
+or sign/send routine session transactions. Asset interpretation and exact rolling
+budget accounting still need to be defined for the execution phase. A grant
+contains no asset, destination, or calldata restriction. These are test fixtures
+on local chain IDs 31337 and 31338; no real funds or RPC endpoints are used.
 
-## What this signature authorizes
+## Public vectors and regeneration
 
-One consent signature can be verified on several chains because the signed root
-and domain are identical everywhere. Each grant separately binds its owner,
-chain, session key, limits, expiry, and nonce. Routine transactions must still
-be signed natively by the session key. Over-limit actions require fresh
-master-key consent in a later execution flow.
+`sdk/test/vectors/mandate.json` fixes two grants, nonce, deadline, every intermediate
+hash, recovered owner, signature, and both envelopes. `docs/vectors/Phase1Vector.sol`
+contains their public Solidity constants. `contracts/test/MandateVector.t.sol`
+recomputes hashes from raw fields, checks both envelopes, and recovers the owner
+without a private key or account contract.
 
-Signature verification alone does not authorize a transaction. Phase 5 must
-verify the grant proof, recovered owner, destination chain, authorized session
-key, nonce, expiry, and spending limits. `signMandate` receives an opaque root
-and cannot inspect which owners are inside it; callers must construct and review
-the intended mandate before signing.
+The dedicated `TEST_VECTOR_KEY` stays in the ignored root `.env`. Never print,
+commit, fund, or deploy with it. Normal tests compare fixed values and do not
+regenerate them. Only exact signing reproduction needs the key; if missing, that
+test explicitly reports a skip while all public verification tests still run.
 
-The omitted verifying contract also means the signature does not distinguish
-two verifiers on the same chain. Canonical verifier selection and shared or
-otherwise constrained nonce/budget state remain protocol decisions for Phase 5.
-The grant has no asset, destination, or calldata restriction. Define which asset
-the amount limits refer to before executing token transfers; arbitrary assets
-cannot safely share a budget by merely comparing their raw integer amounts.
-The exact rolling-window accounting, expiry boundary, nonce invalidation, and
-zero-value policy semantics are not specified by this encoding phase. Zero
-integers encode successfully; execution policy must validate meaningful limits.
+After a deliberate encoding change:
 
-## Fixed vectors and regeneration
+1. Update this specification, SDK encoding, and independent Solidity parity code.
+2. Run `npm run vectors:regenerate` from the repository root. This runs
+   `sdk/scripts/regen-vector.ts`, replaces only TEST_VECTOR_KEY with a fresh key,
+   preserves other environment entries, restricts `.env` permissions, and rewrites
+   the JSON/Solidity public fixtures. Raw errors and secrets are never logged.
+3. Run `npm test`, `npx tsc --noEmit`, and `forge test`. Review the public fixture
+   differences together with the encoding changes before committing them.
 
-The committed fixture has three grants: Sepolia (11155111), Base Sepolia (84532),
-and local Anvil (31337). It includes every input, leaf, proof, root, digest, owner,
-and signature. Tests compare against these literal values; they do not regenerate
-expected outputs during a normal run. The Solidity fixture needs no private key
-and no network. For a future Foundry test, import its library and verify:
-
-```solidity
-// With OpenZeppelin ECDSA and MerkleProof imported in your Foundry test:
-assertEq(ECDSA.recover(Phase1Vector.DIGEST, Phase1Vector.SIGNATURE), Phase1Vector.OWNER);
-Phase1Vector.Grant[] memory grants = Phase1Vector.grants();
-bytes32[] memory leaves = Phase1Vector.leaves();
-for (uint256 i; i < grants.length; ++i) {
-    Phase1Vector.Grant memory g = grants[i];
-    bytes32 leaf = keccak256(bytes.concat(keccak256(abi.encode(
-        g.owner, g.chainId, g.sessionKey, g.perTxLimit,
-        g.budget, g.windowSeconds, g.expiry, g.nonce
-    ))));
-    assertEq(leaf, leaves[i]);
-    assertTrue(MerkleProof.verify(Phase1Vector.proof(i), Phase1Vector.ROOT, leaf));
-}
-// Also compute the domain/struct digest above with Phase1Vector.ROOT
-// and assert equality to Phase1Vector.DIGEST.
-```
-
-The dedicated `TEST_VECTOR_KEY` is stored only in root `.env`, ignored by Git.
-Never fund it, deploy with it, print it, or place it in a Foundry fixture.
-On this machine, the signing test reads that key and reproduces the exact
-signature. Without the key, public verification tests still run and only the
-private signing test is skipped. An existing but mismatched key fails the signing
-test instead of silently updating the expected signature.
-
-After an intentional encoding change:
-
-1. Update the encoding code, this specification, and any independently specified
-   test reference encoding. Review the protocol compatibility implications.
-2. From the repository root, run `npm run vectors:regenerate`. The script uses
-   viem's key generator to rotate **only** `TEST_VECTOR_KEY` in `.env`, preserves
-   other environment entries, restricts `.env` permissions, then reads the key
-   back to sign. It writes the JSON and Solidity fixtures. It never logs the key
-   or raw exception objects.
-3. Run `npm test` and `npm run typecheck`. Review changes to the public vectors
-   and commit those files together with the encoding change. Do not regenerate
-   vectors merely to hide a failing regression test.
-
-Regeneration changes the public owner and therefore every leaf, root, digest,
-and signature, even when the encoding is unchanged. Contributors who only need
-verification do not need to regenerate anything or obtain the key.
+Regeneration rotates the public signer and signature even if the message is
+unchanged. It must not be used merely to conceal a failing encoding regression.

@@ -1,25 +1,16 @@
-# Project: Universal Signing Layer (hackathon prototype, ~30 hours)
-
-Goal: a chain-agnostic signing layer. The user signs ONE mandate with a secp256k1
-master key. Chains verify it on-chain. Session keys then sign routine transactions
-natively (secp256k1 on EVM, ed25519 on Solana) within limits: per-transaction cap,
-rolling budget, expiry. Over-limit actions need fresh master-key consent.
-Honest claim: one consent signature verified on multiple chains. NOT one signature
-that signs every transaction.
-
-Repo layout: contracts/ (Foundry, Solidity), sdk/ (TypeScript, viem, @noble/curves),
-demo/ (Next.js), docs/.
-
+# USL: standing rules for Codex
+Project: EVM-only signing layer. One ERC-7964 mandate signature is verified on-chain per
+chain; a browser-held secp256k1 session key signs limited native transfers; a keyless
+relayer submits. Full context and the FROZEN account interface: docs/PROJECT_CONTEXT.md
+(read only sections 5 and 6 when a task needs them).
 Rules:
-- Testnets only (Sepolia, Base Sepolia, Solana devnet, local anvil). Never real funds.
-- Never hardcode, print, or commit private keys, seed phrases, or RPC URLs. Read them
-  from .env. Keep .env.example updated with variable names only.
-- Do not implement crypto primitives. Use viem, @noble/curves, @noble/hashes,
-  @scure/bip39, @scure/bip32, @openzeppelin/merkle-tree, OpenZeppelin contracts.
-- Check the installed package versions and their real APIs before using them. Do not
-  guess function names.
-- Every feature needs tests. Run them and fix failures before you finish.
-- Keep code small and readable. Comment the WHY of security-relevant lines.
-- After each phase, write docs/phase-N.md: what was built, how to run the tests, and a
-  plain-language explanation for someone new to blockchain.
-- State assumptions and uncertainties instead of silently guessing.
+- Testnets and local anvil only. Never hardcode, print or commit private keys, seeds or
+  RPC URLs; use .env and keep .env.example names-only.
+- No hand-written crypto primitives. Use viem, @noble/*, OpenZeppelin.
+- Check installed package versions and real APIs; never guess function names.
+- Every feature has tests. Run them; fix failures before finishing.
+- KEEP CHANGES SMALL. Do not refactor unrelated code, add dependencies not requested,
+  or re-research decisions marked DECIDED. If unsure, state the assumption in one line
+  and continue.
+- Finish each phase with docs/phase-N.md (max 30 lines, plain language, for a beginner)
+  and a report of test counts and doubts in under 10 lines.

@@ -109,8 +109,8 @@ chain are allowed. `validateMandate(mandate, now)` checks all grants' times;
 `validateGrant(grant, now)` checks an individual session. Encoding and hashing
 validate structure but deliberately have no wall-clock dependency, so historical
 fixtures remain reproducible. Use explicit time validation before requesting a
-signature. Zero amounts/windows can be encoded; meaningful spending-policy
-validation is a later contract concern.
+signature. Zero amounts/windows can be encoded. Phase 5 preserves those values: a zero-second
+window resets on every spend, so use a positive duration for a cumulative budget.
 
 ## Envelope bytes
 
@@ -191,7 +191,7 @@ account. Its address is not directly signed when the top-level domain omits
 verifyingContract. Another provider with identical selected metadata yields the
 same separator. The signed per-grant verifyingContract still binds execution.
 
-## Time and nonce semantics for the future contract
+## Time and nonce semantics for the account contract
 
 Both timestamps are Unix seconds. **deadline** is the last time the signature may
 be submitted; **expiry** is when that grant's session stops working. They are
@@ -204,14 +204,14 @@ a session is active:   expectedGrant.expiry > now
 
 Thus deadline equal to now passes; expiry equal to now fails. `verifyEnvelope`
 requires an injected uint256 bigint `now` and never reads the system clock.
-The future on-chain entry point is:
+The on-chain entry point is:
 
 ```solidity
 registerMandate(MandateGrant grant, uint256 nonce, uint256 deadline, bytes envelope)
 ```
 
-It will use `block.timestamp` as now, bind the local grant to `block.chainid` and
-its own account address, and compare the recovered signer with its stored owner.
+It uses `block.timestamp` as now, binds the local grant to `block.chainid` and
+its own account address, and compares the recovered signer with its stored owner.
 The supplied nonce is a **unique mandate ID**, not a counter. The contract must
 check it is unused, verify that exact value through the signed digest, and only
 mark it used **after verification succeeds**. It must not increment or re-read a
@@ -223,8 +223,8 @@ with no calldata, and enforce a fixed-window budget. A window starts at its firs
 spend and resets when `now >= windowStart + windowSeconds`. This permits a burst
 near twice the budget across a boundary. Tokens and calldata need fresh owner
 consent; the grant has no asset field, so token amounts cannot share its native budget.
-The off-chain pre-check is advisory; on-chain enforcement and used-ID storage
-remain Phase 5 work. Test fixtures use local chains 31337 and 31338 only.
+The off-chain pre-check is advisory; Phase 5 implements on-chain enforcement and
+used-ID storage. Test fixtures use local chains 31337 and 31338 only.
 
 ## Frozen execution messages (Phase 4 update)
 
@@ -245,9 +245,22 @@ The contract requires an active recovered session, `now <= op.deadline`,
 `expiry > now`, `value <= perTxLimit`, and `spent + value <= budget` after resetting
 the fixed window if due. Its unordered operation nonces are tracked per session
 key. `executeWithConsent(address to,uint256 value,bytes data,uint256 nonce,
-uint256 deadline,bytes ownerSignature)` is the future owner-consent route; its
-dataHash binds the calldata and its nonces are also unordered. This update does
-not implement the consent or revocation entry points.
+uint256 deadline,bytes ownerSignature)` is the owner-consent route; its
+dataHash binds the calldata and its nonces are also unordered. Phase 5 implements
+consent and revocation with separate unordered nonce mappings for each action type.
+Operation nonce history survives revocation and re-registration.
+
+## Phase 5 account verification restrictions
+
+The generic SDK verifier permits a separate metadata provider. `MandateAccount`
+requires the envelope application to equal the account itself and fields to be
+exactly `0x03`; other masks are rejected. Its ERC-5267 getter reports `0x0f` for
+chain-bound operations, while registration deliberately hashes only name/version.
+The original public fixtures use a separate application address. Registration tests
+retain every signed hash and signature, repack only the unsigned application header
+for each account, and check that the original envelopes fail `WrongApplication`.
+Canonical envelope offsets, lengths, padding, and nonempty arrays are checked before
+`abi.decode`, so malformed input reverts with a custom error rather than an ABI panic.
 
 ## Public vectors and regeneration
 

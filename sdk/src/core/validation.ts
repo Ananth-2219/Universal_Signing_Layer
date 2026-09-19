@@ -17,6 +17,9 @@ export function validateGrant(grant: MandateGrant, now?: bigint): void {
   assertAddress(grant.sessionKey, 'sessionKey');
   assertUint256(grant.domain.chainId, 'chainId');
   for (const field of ['perTxLimit', 'budget', 'windowSeconds', 'expiry'] as const) assertUint256(grant[field], field);
+  // The account contract rejects a zero window (InvalidWindow): a zero window would
+  // reset the budget on every spend and silently remove the budget limit.
+  if (grant.windowSeconds === 0n) throw new Error('windowSeconds must be greater than zero');
   if (now !== undefined) {
     assertUint256(now, 'now');
     if (grant.expiry <= now) throw new Error('Session expired');

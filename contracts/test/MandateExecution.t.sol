@@ -139,15 +139,15 @@ contract MandateExecutionTest is MandateAccountBase {
         }
     }
 
-    function testZeroDurationResetsEverySpendAsInPolicy() public {
+    function testZeroWindowSecondsRegistrationRevertsInvalidWindow() public {
         MandateAccount.MandateGrant memory g = _grant();
         g.windowSeconds = 0;
+        // Phase 5 fix: a zero window would reset the budget on every spend, so
+        // registration now rejects it instead of silently ignoring the budget.
+        vm.expectRevert(MandateAccount.InvalidWindow.selector);
         account.registerMandate(g, 1, DEADLINE, _envelope(g, 1, DEADLINE, ownerKey));
-        for (uint256 i; i < 3; i++) {
-            _execute(10, i);
-        }
-        assertEq(account.sessions(sessionAddress).spent, 10);
-        assertEq(RECEIVER.balance, 30);
+        assertFalse(account.mandateIdUsed(1));
+        assertFalse(account.sessions(sessionAddress).active);
     }
 
     function testZeroValueFirstSpendAtTimestampZeroStartsWindow() public {

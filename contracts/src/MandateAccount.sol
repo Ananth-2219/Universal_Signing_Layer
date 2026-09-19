@@ -41,6 +41,7 @@ contract MandateAccount is EIP712, ReentrancyGuard {
 
     error InvalidOwner();
     error InvalidSessionKey();
+    error InvalidWindow();
     error NotOwner();
     error WrongChain();
     error WrongAccount();
@@ -115,6 +116,8 @@ contract MandateAccount is EIP712, ReentrancyGuard {
         _checkDeadline(deadline);
         if (grant.expiry <= block.timestamp) revert SessionExpired();
         if (grant.sessionKey == address(0)) revert InvalidSessionKey();
+        // A zero window would reset the budget on every spend, silently removing the budget limit.
+        if (grant.windowSeconds == 0) revert InvalidWindow();
         if (mandateIdUsed[nonce]) revert MandateNonceUsed();
         if (_sessions[grant.sessionKey].active) revert SessionAlreadyActive();
 

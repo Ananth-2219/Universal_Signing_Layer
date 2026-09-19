@@ -99,7 +99,11 @@ describe('fixed-window spending', () => {
   });
   it('follows the specified reset expression even for a zero-duration window', () => {
     const tracker = fresh({ windowSeconds: 0n }); tracker.record(20n, 100n);
-    expect(evaluate(intent, { ...grant, windowSeconds: 0n }, tracker, 100n).decision).toBe('allow');
+    // The tracker expression itself is unchanged: a zero window resets on every spend.
+    expect(tracker.snapshot(100n).spent).toBe(0n);
+    // Phase 5: the account contract rejects windowSeconds == 0 (InvalidWindow), so the
+    // policy layer now denies such a grant instead of reporting it as allowed.
+    expect(evaluate(intent, { ...grant, windowSeconds: 0n }, tracker, 100n).decision).toBe('deny');
   });
 });
 

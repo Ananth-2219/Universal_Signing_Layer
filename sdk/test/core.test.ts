@@ -239,6 +239,14 @@ describe('validation', () => {
     expect(() => validateGrant({ ...grant, expiry: now }, now)).toThrow('expired');
     expect(() => validateGrant({ ...grant, expiry: now + 1n }, now)).not.toThrow();
   });
+  it('rejects a zero window because the account contract reverts with InvalidWindow', () => {
+    expect(() => validateGrant({ ...grant, windowSeconds: 0n })).toThrow('greater than zero');
+    expect(() => validateMandate({ ...mandate, grants: [{ ...grant, windowSeconds: 0n }] })).toThrow('greater than zero');
+    expect(() => createMandate({
+      sessionKey: grant.sessionKey, chains: [{ chainId: grant.domain.chainId, account: grant.domain.verifyingContract }],
+      limits: { ...grant, windowSeconds: 0n }, nonce: mandate.nonce, deadline: mandate.deadline, now,
+    })).toThrow('greater than zero');
+  });
   it.each(['chainId', 'perTxLimit', 'budget', 'windowSeconds', 'expiry', 'nonce', 'deadline'] as const)(
     'validates uint256 bigint %s', field => {
       for (const value of [-1n, maxUint256 + 1n, 1, '1', undefined]) {
@@ -253,6 +261,11 @@ describe('validation', () => {
         if (field === 'chainId') changed.grants[0]!.domain.chainId = value;
         else if (field === 'nonce' || field === 'deadline') changed[field] = value;
         else changed.grants[0]![field] = value;
+        // 0 is a valid uint256 but not a valid window: the account rejects it (InvalidWindow).
+        if (field === 'windowSeconds' && value === 0n) {
+          expect(() => mandateDigest(changed)).toThrow('greater than zero');
+          continue;
+        }
         expect(() => mandateDigest(changed)).not.toThrow();
       }
     },

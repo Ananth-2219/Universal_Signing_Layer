@@ -13,6 +13,7 @@ import {
 } from '../src/core/index.js';
 import { createSessionKey, type SessionKey } from '../src/keys/index.js';
 import { EvmAdapter, NeedsConsentError, ViemSubmitter, ACCOUNT_ABI } from '../src/adapters/index.js';
+import { createRelayer } from '../../relayer/src/server.js';
 
 /**
  * Phase 7: one owner, ONE owner-signed mandate, two local anvil chains (31337 on 8545,
@@ -31,6 +32,10 @@ const viewAbi = parseAbi([
   'function mandateIdUsed(uint256 mandateId) view returns (bool)',
   'function operationNonceUsed(address sessionKey, uint256 nonce) view returns (bool)',
 ]);
+const consentAbi = parseAbi([
+  'function executeWithConsent(address to,uint256 value,bytes data,uint256 nonce,uint256 deadline,bytes ownerSignature)',
+  'function revokeSession(address sessionKey)',
+]);
 const mandateRegisteredEvent = parseAbiItem('event MandateRegistered(address sessionKey, uint256 mandateId, uint256 expiry)');
 const executedEvent = parseAbiItem('event Executed(address sessionKey, address to, uint256 value)');
 
@@ -43,6 +48,7 @@ const ERRORS = {
   SessionNotActive: selector('SessionNotActive()'),
   PerTxLimitExceeded: selector('PerTxLimitExceeded()'),
   BudgetExceeded: selector('BudgetExceeded()'),
+  WrongSigner: selector('WrongSigner()'),
   WrongChain: selector('WrongChain()'),
   WrongAccount: selector('WrongAccount()'),
 } as const;
@@ -236,6 +242,22 @@ describe('Phase 7: one mandate, two anvil chains, enforced session limits', () =
     expect(spent.spent).toBe(SMALL); // rejected operation leaves state untouched
   });
 
+  it('relays only simulated allowlisted operations and rate-limits callers', async () => {
+    const node = nodes[0]!; const key = generatePrivateKey();
+    const relayer = createRelayer({ privateKey: key, rateLimit: 2, chains: [{ chainId: node.chainId, rpcUrl: `http://127.0.0.1:8545`, accounts: [node.account], gasPriceCap: 100_000_000_000n }] });
+    await node.testClient.setBalance({ address: privateKeyToAccount(key).address, value: parseEther('1') });
+    const op = node.adapter.buildOperation({ chainId: node.caip2, to: node.relayer.address, amount: 1n, asset: 'native' }, { account: node.account, now: chainNow });
+    const signature = await node.adapter.signOperation(op, node.account, session, chainNow);
+    const hash = await relayer.relay({ chainId: node.chainId, account: node.account, kind: 'execute', args: { ...op, value: op.value.toString(), nonce: op.nonce.toString(), deadline: op.deadline.toString(), signature } }, 'test');
+    expect((await node.publicClient.waitForTransactionReceipt({ hash })).status).toBe('success');
+    await expect(relayer.relay({ chainId: node.chainId, account: node.account, kind: 'execute', args: { ...op, value: (LIMITS.perTxLimit + 1n).toString(), nonce: '99', deadline: op.deadline.toString(), signature } }, 'bad')).rejects.toThrow('simulation reverted');
+    await expect(relayer.relay({ chainId: node.chainId, account: node.relayer.address, kind: 'execute', args: {} }, 'other')).rejects.toThrow('unknown account');
+    await expect(relayer.relay({ chainId: node.chainId, account: node.account, kind: 'consent', args: {} }, 'other2')).rejects.toThrow('invalid request');
+    await expect(relayer.relay({ chainId: node.chainId, account: node.account, kind: 'execute', args: {} }, 'limit')).rejects.toThrow('invalid to');
+    await expect(relayer.relay({ chainId: node.chainId, account: node.account, kind: 'execute', args: {} }, 'limit')).rejects.toThrow('invalid to');
+    await expect(relayer.relay({ chainId: node.chainId, account: node.account, kind: 'execute', args: {} }, 'limit')).rejects.toThrow('rate limit exceeded');
+  }, 15_000);
+
   it('rejects a transfer above the remaining budget', async () => {
     const node = nodes[1]!;
     // Fill the remaining budget with one per-transaction-limit-sized transfer.
@@ -322,6 +344,29 @@ describe('Phase 7: one mandate, two anvil chains, enforced session limits', () =
     await node.testClient.mine({ blocks: 1 });
     expect(await revertData(node.publicClient, node.account, data)).toBe(ERRORS.SessionExpired);
   });
+
+  it('Phase 9B: leaked session key cannot impersonate owner and stops after revocation', async () => {
+    const node = nodes[1]!;
+    // A session-key signature over the owner-consent typed data recovers the wrong signer.
+    const consent = { to: node.relayer.address, value: 0n, data: '0x' as Hex, nonce: 700n, deadline: chainNow + 300n };
+    const ownerSignature = await session.signTypedData({
+      domain: { name: 'USLMandate', version: '1', chainId: BigInt(node.chainId), verifyingContract: node.account },
+      types: { Consent: [{ name: 'to', type: 'address' }, { name: 'value', type: 'uint256' }, { name: 'dataHash', type: 'bytes32' }, { name: 'nonce', type: 'uint256' }, { name: 'deadline', type: 'uint256' }] },
+      primaryType: 'Consent', message: { to: consent.to, value: consent.value, dataHash: keccak256(consent.data), nonce: consent.nonce, deadline: consent.deadline },
+    }, chainNow);
+    const consentData = encodeFunctionData_({ abi: consentAbi, functionName: 'executeWithConsent', args: [consent.to, consent.value, consent.data, consent.nonce, consent.deadline, ownerSignature] });
+    expect(await revertData(node.publicClient, node.account, consentData)).toBe(ERRORS.WrongSigner);
+
+    const attackerOp = node.adapter.buildOperation({ chainId: node.caip2, to: node.relayer.address, amount: 1n, asset: 'native' }, { account: node.account, now: chainNow });
+    const attackerSignature = await node.adapter.signOperation(attackerOp, node.account, session, chainNow);
+    const before = await node.publicClient.readContract({ address: node.account, abi: viewAbi, functionName: 'sessions', args: [session.address] });
+    expect(before.spent).toBeLessThanOrEqual(LIMITS.budget);
+    await node.testClient.setBalance({ address: owner.address, value: parseEther('1') });
+    const ownerWallet = createWalletClient({ account: owner, chain: node.chain, transport: http('http://127.0.0.1:8546') });
+    const revoke = await ownerWallet.writeContract({ chain: undefined, address: node.account, abi: consentAbi, functionName: 'revokeSession', args: [session.address] });
+    expect((await node.publicClient.waitForTransactionReceipt({ hash: revoke })).status).toBe('success');
+    expect(await revertData(node.publicClient, node.account, encodeFunctionData(attackerOp, attackerSignature))).toBe(ERRORS.SessionNotActive);
+  }, 15_000);
 });
 
 /** SDK-built calldata for executeWithSessionSig, using the frozen ABI. */

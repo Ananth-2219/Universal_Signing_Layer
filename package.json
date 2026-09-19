@@ -7,6 +7,7 @@
   "scripts": {
     "test": "node node_modules/vitest/vitest.mjs run --root sdk",
     "typecheck": "node node_modules/typescript/bin/tsc --noEmit -p sdk/tsconfig.json",
-    "vectors:regenerate": "node --import tsx sdk/scripts/regen-vector.ts"
+    "vectors:regenerate": "node --import tsx sdk/scripts/regen-vector.ts",
+    "leak-sim": "node --import tsx sdk/scripts/leak-sim.ts"
   }
 }

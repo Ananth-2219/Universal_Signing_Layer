@@ -46,14 +46,33 @@ it('builds exactly the frozen native Operation with injected time and uint256 no
   expect(adapter.buildOperation({ ...intent, data: '0x' }, { ...context, ttlSeconds: 12n })).toMatchObject({ deadline: now + 12n });
 });
 it.each([
-  { asset: token }, { data: '0x00' }, { data: '0xa9059cbb' }, { data: '0x095ea7b3' },
+  { asset: token }, { asset: token, data: '0xa9059cbb' }, { data: '0x00' }, { data: '0xa9059cbb' }, { data: '0x095ea7b3' },
 ])('requires fresh consent for token or calldata intent %#', change => {
   expect(() => adapter.buildOperation({ ...intent, ...change } as Intent, context)).toThrow(NeedsConsentError);
 });
-it('rejects legacy calldata Operations instead of silently stripping requested actions', () => {
-  const legacy = { ...operation(), data: '0x1234' as Hex };
-  expect(() => adapter.operationTypedData(legacy, account)).toThrow(NeedsConsentError);
-  expect(() => adapter.buildExecuteRequest(legacy, account, vector.signature as Hex)).toThrow(NeedsConsentError);
+it('rejects legacy Operations carrying calldata or an asset field instead of silently dropping them', () => {
+  const extras = [{ data: '0x1234' as Hex }, { asset: token }, { data: '0x1234' as Hex, asset: token }];
+  for (const extra of extras) {
+    const legacy = { ...operation(), ...extra };
+    expect(() => adapter.operationTypedData(legacy, account)).toThrow(NeedsConsentError);
+    expect(() => adapter.buildExecuteRequest(legacy, account, vector.signature as Hex)).toThrow(NeedsConsentError);
+  }
+});
+it('exposes exactly the two frozen account ABI fragments with frozen tuple shapes', () => {
+  expect(ACCOUNT_ABI.map(item => [item.type, item.name])).toEqual([
+    ['function', 'executeWithSessionSig'], ['function', 'registerMandate'],
+  ]);
+  const execute = ACCOUNT_ABI.find(f => f.name === 'executeWithSessionSig')!;
+  expect(execute.inputs.map(input => input.type)).toEqual(['tuple', 'bytes']);
+  expect(execute.inputs[0].components.map(field => `${field.name}:${field.type}`))
+    .toEqual(['to:address', 'value:uint256', 'nonce:uint256', 'deadline:uint256']);
+  const register = ACCOUNT_ABI.find(f => f.name === 'registerMandate')!;
+  expect(register.inputs.map(input => input.type)).toEqual(['tuple', 'uint256', 'uint256', 'bytes']);
+  expect(register.inputs[0].components.map(field => `${field.name}:${field.type}`)).toEqual([
+    'domain:tuple', 'sessionKey:address', 'perTxLimit:uint256', 'budget:uint256', 'windowSeconds:uint256', 'expiry:uint256',
+  ]);
+  expect(register.inputs[0].components[0].components.map(field => `${field.name}:${field.type}`))
+    .toEqual(['chainId:uint256', 'verifyingContract:address']);
 });
 it.each([
   { chainId: 'eip155:31338' }, { amount: -1n }, { amount: maxUint256 + 1n },
@@ -102,7 +121,10 @@ it('round-trips the operation and signature through execute calldata', async () 
   expect(req).toMatchObject({ chainId, to: account, value: 0n });
   const execute = ACCOUNT_ABI.find(f => f.name === 'executeWithSessionSig')!;
   expect(execute.inputs[0].components.map(field => field.type)).toEqual(['address', 'uint256', 'uint256', 'uint256']);
-  expect(decodeFunctionData({ abi: ACCOUNT_ABI, data: req.data })).toEqual({ functionName: 'executeWithSessionSig', args: [{ ...op, to: getAddress(op.to) }, signature] });
+  const decoded = decodeFunctionData({ abi: ACCOUNT_ABI, data: req.data });
+  expect(decoded).toEqual({ functionName: 'executeWithSessionSig', args: [{ ...op, to: getAddress(op.to) }, signature] });
+  // The frozen Operation has exactly four fields: no data, no asset, no token fields.
+  expect(Object.keys(decoded.args[0])).toEqual(['to', 'value', 'nonce', 'deadline']);
 });
 it.each([0, 1])('registers the correct grant and envelope index %i', index => {
   const mandate = vectorMandate(), grant = mandate.grants[index]!;

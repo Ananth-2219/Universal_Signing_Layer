@@ -218,11 +218,36 @@ mark it used **after verification succeeds**. It must not increment or re-read a
 changed counter while reconstructing the signature. All state changes must be
 atomic and precede any external execution. Each account tracks its own used IDs.
 
-This phase does not deploy the account, track used IDs, enforce rolling budgets,
-or sign/send routine session transactions. Asset interpretation and exact rolling
-budget accounting still need to be defined for the execution phase. A grant
-contains no asset, destination, or calldata restriction. These are test fixtures
-on local chain IDs 31337 and 31338; no real funds or RPC endpoints are used.
+The execution design was frozen during Phase 4: sessions transfer native ETH only,
+with no calldata, and enforce a fixed-window budget. A window starts at its first
+spend and resets when `now >= windowStart + windowSeconds`. This permits a burst
+near twice the budget across a boundary. Tokens and calldata need fresh owner
+consent; the grant has no asset field, so token amounts cannot share its native budget.
+The off-chain pre-check is advisory; on-chain enforcement and used-ID storage
+remain Phase 5 work. Test fixtures use local chains 31337 and 31338 only.
+
+## Frozen execution messages (Phase 4 update)
+
+Deploy the non-upgradeable accounts before requesting the user's wallet signature.
+Operation, Consent, and RevokeSession use name `USLMandate`, version `1`, WITH
+the current chainId and verifyingContract (the account) in their EIP-712 domain.
+These domains differ from the chain-agnostic mandate domain above.
+
+```text
+Operation(address to,uint256 value,uint256 nonce,uint256 deadline)
+Consent(address to,uint256 value,bytes32 dataHash,uint256 nonce,uint256 deadline)
+RevokeSession(address sessionKey,uint256 nonce,uint256 deadline)
+```
+
+`executeWithSessionSig(Operation op, bytes signature)` is permissionless. The
+Operation has no data field: native transfers have empty calldata by construction.
+The contract requires an active recovered session, `now <= op.deadline`,
+`expiry > now`, `value <= perTxLimit`, and `spent + value <= budget` after resetting
+the fixed window if due. Its unordered operation nonces are tracked per session
+key. `executeWithConsent(address to,uint256 value,bytes data,uint256 nonce,
+uint256 deadline,bytes ownerSignature)` is the future owner-consent route; its
+dataHash binds the calldata and its nonces are also unordered. This update does
+not implement the consent or revocation entry points.
 
 ## Public vectors and regeneration
 

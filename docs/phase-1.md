@@ -92,7 +92,7 @@ EOA signatures, not contract-wallet signatures. The decoder deliberately require
 canonical ABI layout, rejecting extra bytes, gaps, or nonzero padding.
 
 Real wallet display quality is wallet-dependent; this phase supplies structured
-fields but does not implement or test a wallet UI. EVM execution, rolling budgets,
+fields but does not implement or test a wallet UI. EVM execution, fixed-window budgets,
 nonce storage, and fresh consent for over-limit actions remain later work.
 
 ## Plain-language explanation

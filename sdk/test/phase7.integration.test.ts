@@ -16,8 +16,8 @@ import { EvmAdapter, NeedsConsentError, ViemSubmitter, ACCOUNT_ABI } from '../sr
 import { createRelayer } from '../../relayer/src/server.js';
 
 /**
- * Phase 7: one owner, ONE owner-signed mandate, two local anvil chains (31337 on 8545,
- * 31338 on 8546), and real on-chain enforcement of session limits. The suite starts and
+ * Phase 7: one owner, ONE owner-signed mandate, two local anvil chains (31337 on 8567,
+ * 31338 on 8568), and real on-chain enforcement of session limits. The suite starts and
  * stops its own anvil nodes, so `npm test` runs the whole flow offline. Keys (owner,
  * relayer, session) are generated in memory and are never printed, written, or sent
  * anywhere; every printed or asserted value is an address, amount, or boolean.
@@ -54,8 +54,8 @@ const ERRORS = {
 } as const;
 
 const CHAINS = [
-  { chainId: 31337, port: 8545, caip2: 'eip155:31337', label: 'A' },
-  { chainId: 31338, port: 8546, caip2: 'eip155:31338', label: 'B' },
+  { chainId: 31337, port: 8567, caip2: 'eip155:31337', label: 'A' },
+  { chainId: 31338, port: 8568, caip2: 'eip155:31338', label: 'B' },
 ] as const;
 const LIMITS = { perTxLimit: 1_000_000_000_000_000n, budget: 1_100_000_000_000_000n, windowSeconds: 3600n };
 const SMALL = 100_000_000_000_000n; // 0.0001 ETH: the first permitted transfer.
@@ -244,7 +244,7 @@ describe('Phase 7: one mandate, two anvil chains, enforced session limits', () =
 
   it('relays only simulated allowlisted operations and rate-limits callers', async () => {
     const node = nodes[0]!; const key = generatePrivateKey();
-    const relayer = createRelayer({ privateKey: key, rateLimit: 2, chains: [{ chainId: node.chainId, rpcUrl: `http://127.0.0.1:8545`, accounts: [node.account], gasPriceCap: 100_000_000_000n }] });
+    const relayer = createRelayer({ privateKey: key, rateLimit: 2, chains: [{ chainId: node.chainId, rpcUrl: node.chain.rpcUrls.default.http[0]!, accounts: [node.account], gasPriceCap: 100_000_000_000n }] });
     await node.testClient.setBalance({ address: privateKeyToAccount(key).address, value: parseEther('1') });
     const op = node.adapter.buildOperation({ chainId: node.caip2, to: node.relayer.address, amount: 1n, asset: 'native' }, { account: node.account, now: chainNow });
     const signature = await node.adapter.signOperation(op, node.account, session, chainNow);
@@ -362,7 +362,7 @@ describe('Phase 7: one mandate, two anvil chains, enforced session limits', () =
     const before = await node.publicClient.readContract({ address: node.account, abi: viewAbi, functionName: 'sessions', args: [session.address] });
     expect(before.spent).toBeLessThanOrEqual(LIMITS.budget);
     await node.testClient.setBalance({ address: owner.address, value: parseEther('1') });
-    const ownerWallet = createWalletClient({ account: owner, chain: node.chain, transport: http('http://127.0.0.1:8546') });
+    const ownerWallet = createWalletClient({ account: owner, chain: node.chain, transport: http(node.chain.rpcUrls.default.http[0]) });
     const revoke = await ownerWallet.writeContract({ chain: undefined, address: node.account, abi: consentAbi, functionName: 'revokeSession', args: [session.address] });
     expect((await node.publicClient.waitForTransactionReceipt({ hash: revoke })).status).toBe('success');
     expect(await revertData(node.publicClient, node.account, encodeFunctionData(attackerOp, attackerSignature))).toBe(ERRORS.SessionNotActive);

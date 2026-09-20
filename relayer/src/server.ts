@@ -9,6 +9,7 @@ export type RelayerChain = { chainId: number; rpcUrl: string; accounts: readonly
 export type RelayerOptions = { chains: readonly RelayerChain[]; privateKey: Hex; rateLimit?: number };
 const MAX_BODY = 32_768;
 const RELAYER_ABI = parseAbi(['function revokeSessionWithSig(address sessionKey,uint256 nonce,uint256 deadline,bytes ownerSignature)']);
+const LOCAL_DEMO_ORIGINS = new Set(['http://localhost:3000', 'http://127.0.0.1:3000']);
 
 function fail(message: string): never { throw new Error(message); }
 function uint(value: unknown, name: string): bigint {
@@ -31,6 +32,14 @@ function callFor(kind: Kind, args: readonly unknown[]): Hex {
   return encodeFunctionData({ abi: ACCOUNT_ABI, functionName: kind === 'register' ? 'registerMandate' : 'executeWithSessionSig', args: args as never });
 }
 function safeReason(error: unknown): string { const data = (error as { data?: unknown })?.data; return typeof data === 'string' ? `simulation reverted (${data.slice(0, 10)})` : 'simulation reverted'; }
+function setLocalDemoCors(req: IncomingMessage, res: ServerResponse): void {
+  const origin = req.headers.origin;
+  if (!origin || !LOCAL_DEMO_ORIGINS.has(origin)) return;
+  res.setHeader('Access-Control-Allow-Origin', origin);
+  res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
+  res.setHeader('Access-Control-Allow-Headers', 'content-type');
+  res.setHeader('Vary', 'Origin');
+}
 
 export function createRelayer(options: RelayerOptions) {
   const account = privateKeyToAccount(options.privateKey);
@@ -53,6 +62,8 @@ export function createRelayer(options: RelayerOptions) {
     return wallet.sendTransaction({ chain: undefined, to: req.account, data, gasPrice });
   }
   const server = createServer(async (req: IncomingMessage, res: ServerResponse) => {
+    setLocalDemoCors(req, res);
+    if (req.method === 'OPTIONS' && req.url === '/relay') { res.statusCode = 204; return void res.end(); }
     if (req.method === 'GET' && req.url === '/health') return void res.end(JSON.stringify({ ok: true }));
     if (req.method !== 'POST' || req.url !== '/relay') { res.statusCode = 404; return void res.end(JSON.stringify({ error: 'not found' })); }
     let body = ''; req.on('data', c => { body += c; if (body.length > MAX_BODY) req.destroy(); });

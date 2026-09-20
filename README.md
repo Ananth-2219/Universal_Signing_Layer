@@ -1,5 +1,10 @@
 # Universal Signing Layer (USL)
 
+The current judge UI defaults to Direct Wallet Mode on Ethereum Sepolia, Base Sepolia,
+and Arbitrum Sepolia. MetaMask submits each transaction and pays gas; the browser session
+key authorizes routine transfers. See [the judge-demo runbook](docs/judge-demo.md) for setup,
+verification scope, and the exact presentation sequence. The relayer remains optional.
+
 > A lightweight, EVM-only signing abstraction that combines ERC-7964-style cross-chain mandates with bounded client-side session keys.
 
 Universal Signing Layer (USL) enables applications to obtain user authorization once and execute limited routine transactions across supported EVM chains without requiring the user to approve every individual transaction.

@@ -3,6 +3,12 @@
   "version": "0.1.0",
   "private": true,
   "type": "module",
+  "exports": {
+    "./core": "./src/core/index.ts",
+    "./keys": "./src/keys/index.ts",
+    "./adapters": "./src/adapters/index.ts",
+    "./policy": "./src/policy/index.ts"
+  },
   "scripts": {
     "test": "vitest run",
     "typecheck": "tsc --noEmit",

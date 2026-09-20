@@ -137,6 +137,11 @@ export function mandateDigest(mandate: Mandate): Hex {
 export async function signMandate(mandate: Mandate, account: LocalAccount): Promise<Hex> {
   return account.signTypedData(mandateTypedData(mandate));
 }
+/** The wallet side of the same typed data: a browser wallet (MetaMask) signs instead of a local key. */
+export type MandateSigner = { signTypedData(args: ReturnType<typeof mandateTypedData>): Promise<Hex> };
+export async function signMandateWithWallet(wallet: MandateSigner, mandate: Mandate): Promise<Hex> {
+  return wallet.signTypedData(mandateTypedData(mandate));
+}
 /** This prototype accepts canonical 65-byte EOA signatures only. */
 export function assertSignature(signature: Hex): void {
   if (!/^0x[\da-fA-F]{130}$/.test(signature) || !['1b', '1c'].includes(signature.slice(-2).toLowerCase())) {

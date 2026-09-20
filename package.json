@@ -2,12 +2,17 @@
   "name": "universal-signing-layer",
   "private": true,
   "workspaces": [
-    "sdk"
+    "sdk",
+    "demo"
   ],
   "scripts": {
     "test": "node node_modules/vitest/vitest.mjs run --root sdk",
     "typecheck": "node node_modules/typescript/bin/tsc --noEmit -p sdk/tsconfig.json",
     "vectors:regenerate": "node --import tsx sdk/scripts/regen-vector.ts",
-    "leak-sim": "node --import tsx sdk/scripts/leak-sim.ts"
+    "leak-sim": "node --import tsx sdk/scripts/leak-sim.ts",
+    "relayer": "node --import tsx relayer/index.ts",
+    "demo": "npm --workspace demo run dev",
+    "demo:build": "npm --workspace demo run build",
+    "demo:typecheck": "npm --workspace demo run typecheck"
   }
 }

@@ -1,4 +1,4 @@
 {
   "extends": "./sdk/tsconfig.json",
-  "include": ["sdk/src", "sdk/test", "sdk/scripts", "relayer"]
+  "include": ["sdk/src", "sdk/test", "sdk/scripts", "relayer", "demo/src/lib", "demo/src/app/api"]
 }

@@ -463,72 +463,163 @@ No production private keys or RPC secrets should be committed to the repository.
 
 ## Local Setup
 
-### Prerequisites
+The default demo uses Ethereum Sepolia, Base Sepolia, and Arbitrum Sepolia in
+Relayer Mode. Use test ETH only. The current website is a **single-owner demo**:
+it reads one `deployments/<chainId>.json` record per chain, rather than creating
+an account automatically for each visitor.
 
-- Node.js
-- npm
-- Foundry
-- Git
-- WSL2 Ubuntu (recommended for the development environment)
+### 1. Install prerequisites and dependencies
 
-### Clone the Repository
+Install Node.js 24, npm, Foundry, Git, and MetaMask with testnets enabled. In a
+Linux or WSL2 terminal, clone the repository and install its exact dependencies:
 
 ```bash
 git clone https://github.com/Ananth-2219/Universal_Signing_Layer
 cd USL_PROJ
+git submodule update --init --recursive
+npm ci
+forge build
 ```
 
-### Environment Configuration
+### 2. Configure local environment files
 
-Create a local `.env` file.
+Never commit `.env` or `demo/.env.local`. Copy the example files:
 
-Use `.env.example` as a variable-name reference.
+```bash
+cp .env.example .env
+cp demo/.env.example demo/.env.local
+```
 
-Never commit private keys, API keys, or RPC secrets.
-
-Example variable names:
+In root `.env`, set these locally:
 
 ```env
+# Server-side RPC endpoints used by deployment and the relayer.
 SEPOLIA_RPC_URL=
 BASE_SEPOLIA_RPC_URL=
 ARBITRUM_SEPOLIA_RPC_URL=
 
+# Public address of the MetaMask wallet that will own every deployed account.
+OWNER_ADDRESS=
+
+# Throwaway testnet-only relayer key. Fund its derived address on every selected chain.
+RELAYER_PRIVATE_KEY=
+
+# Optional: only needed when deploying through a Foundry private-key workflow.
 DEPLOYER_PRIVATE_KEY=
 
-TEST_VECTOR_KEY=
-OWNER_TEST_KEY=
-SESSION_TEST_KEY=
+# Leave empty or set to testnet for the three public testnets.
+RELAYER_NETWORK_MODE=testnet
 ```
 
-Only configure testnet or local development credentials.
+In `demo/.env.local`, set matching browser-readable RPC endpoints:
 
-### Start Local Anvil Networks
+```env
+NEXT_PUBLIC_SEPOLIA_RPC_URL=
+NEXT_PUBLIC_BASE_SEPOLIA_RPC_URL=
+NEXT_PUBLIC_ARBITRUM_SEPOLIA_RPC_URL=
 
-Terminal 1:
+# Leave empty for public testnets.
+NEXT_PUBLIC_NETWORK_MODE=
+NEXT_PUBLIC_SUBMISSION_MODE=relayer
+```
+
+The browser RPC values are visible to browser users. Use provider credentials
+restricted to your local/demo origin. Root `.env` stays server-side; do not place
+`RELAYER_PRIVATE_KEY` in the demo environment file.
+
+### 3. Prepare the three required testnet balances
+
+For each selected chain, fund three different addresses with test ETH:
+
+| Address | Why it needs ETH |
+|---|---|
+| MetaMask owner wallet | Deployment gas and Direct Wallet Mode gas |
+| Relayer address derived from `RELAYER_PRIVATE_KEY` | Gas for Relayer Mode registration and transfers |
+| Deployed `MandateAccount` | ETH that session-key transfers actually send to recipients |
+
+The relayer does not hold transfer funds. The account contract does not pay the
+relayer's outer transaction gas.
+
+### 4. Deploy one account contract per chain
+
+The deploy script creates an account whose immutable `owner` is `OWNER_ADDRESS`.
+It writes the resulting contract address and owner address to
+`deployments/<chainId>.json`, which the website and relayer both read.
+
+Configure a funded Foundry keystore account named `testnet-deployer`, then run:
 
 ```bash
-anvil --chain-id 31337 --port 8545
+set -a
+. ./.env
+set +a
+
+forge script contracts/script/DeployMandateAccount.s.sol:DeployMandateAccount \
+  --account testnet-deployer --rpc-url "$SEPOLIA_RPC_URL" --broadcast
+
+forge script contracts/script/DeployMandateAccount.s.sol:DeployMandateAccount \
+  --account testnet-deployer --rpc-url "$BASE_SEPOLIA_RPC_URL" --broadcast
+
+forge script contracts/script/DeployMandateAccount.s.sol:DeployMandateAccount \
+  --account testnet-deployer --rpc-url "$ARBITRUM_SEPOLIA_RPC_URL" --broadcast
 ```
 
-Terminal 2:
+> Running this script again on a chain deploys another account and replaces that
+> chain's local deployment record. The previous contract remains on-chain, but
+> the demo will point to the newest recorded contract.
+
+After deployment, send test ETH to every newly recorded `mandateAccount` address
+in `deployments/11155111.json`, `deployments/84532.json`, and
+`deployments/421614.json`.
+
+### 5. Start the relayer and website
+
+Use two terminals from the repository root:
 
 ```bash
-anvil --chain-id 31338 --port 8546
+# Terminal 1
+npm run relayer
 ```
-
-Verify the chain IDs:
 
 ```bash
-cast chain-id --rpc-url http://127.0.0.1:8545
-cast chain-id --rpc-url http://127.0.0.1:8546
+# Terminal 2
+npm run dev
 ```
 
-Expected results:
+Open the localhost URL printed by Next.js. If you change an RPC URL or a
+`NEXT_PUBLIC_*` value, restart the demo server. If you change root relayer
+configuration, restart the relayer.
 
-```text
-31337
-31338
+### 6. Use the website in this order
+
+1. Connect the MetaMask account matching `OWNER_ADDRESS`.
+2. Run **Pre-Demo Check**. It must find deployed bytecode, the expected owner,
+   configured RPCs, and sufficient test balances.
+3. Select chains and set per-transfer limit, total budget, window, and expiry.
+4. Generate a browser session key.
+5. Sign the mandate once with MetaMask.
+6. Select **Relayer Mode** and register or retry every selected chain.
+7. Wait for every registration receipt to confirm.
+8. Enter a recipient and a small amount within the signed limit, then send a
+   session transfer.
+9. Revoke the session from the owner wallet when the demonstration is complete.
+
+Reloading the page destroys the in-memory session private key. It does not revoke
+the on-chain session; revoke it explicitly first if the session should stop early.
+
+### Local Anvil mode
+
+For local testing, set `NEXT_PUBLIC_NETWORK_MODE=local`, configure
+`NEXT_PUBLIC_ANVIL_RPC_A/B/C`, and use `RELAYER_NETWORK_MODE=local`. Start three
+test-only nodes without printing their development keys:
+
+```bash
+anvil --silent --chain-id 31337 --port 8546
+anvil --silent --chain-id 31338 --port 8547
+anvil --silent --chain-id 31339 --port 8548
 ```
+
+Deploy and fund an account on each local chain before signing. The full public-testnet
+presentation flow is also available in [docs/judge-demo.md](docs/judge-demo.md).
 
 ---
 

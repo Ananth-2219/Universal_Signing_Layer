@@ -18,6 +18,8 @@ import { DEMO_CHAINS, RELAYER_URL, UNCONFIGURED_CHAINS, chainById } from '../lib
 import { clockTime, eth, shortHex } from '../lib/format';
 import { assertDeployment, parseSubmissionMode, submitDirect, type SubmissionMode } from '../lib/submission';
 import { describeActionError, redactErrorText } from '../lib/actionError';
+import { recordConfirmedSpend } from '../lib/confirmedSpend';
+import { registrationReceipt } from '../lib/registrationReceipt';
 import { buildChainMandate, budgetProbeValue, checkReadiness, probeSignedOperation, registrationComplete, type Readiness } from '../lib/judge';
 import {
   createDemoAttacker, describeError, ensureWalletChain, parseLimits,
@@ -388,6 +390,13 @@ export function DemoProvider({ children }: { children: ReactNode }) {
       if (!key) throw new Error('Generate a session key first');
       if (!mandate || !signature) throw new Error('Sign the mandate first');
       if (!address) throw new Error('Connect MetaMask first');
+      if (submissionMode === 'relayer') {
+        const online = await relayerIsUp(RELAYER_URL, fetch);
+        setRelayerUp(online);
+        if (!online) {
+          throw new Error('Relayer health check failed through /api/relayer/health. Check the demo server terminal and the relayer health endpoint. Restart the demo after changing NEXT_PUBLIC_RELAYER_URL. Registration in Relayer Mode does not prompt MetaMask.');
+        }
+      }
       for (const chain of selectedChains) {
         try {
           const deployment = deploymentFor(chain.chainId);
@@ -397,16 +406,24 @@ export function DemoProvider({ children }: { children: ReactNode }) {
             continue;
           }
           setRegistrations(previous => ({ ...previous, [chain.chainId]: 'awaiting wallet / receipt' }));
-          const now = (await getClient(chain).getBlock()).timestamp;
-          const plan = await planRegistration({
-            mandate, signature, chain, account: deployment.mandateAccount, owner: address, now,
-          });
-          if (!plan.verification.valid) throw new Error(`the SDK rejected the envelope: ${plan.verification.message}`);
-          log('info', `${chain.label}: the SDK verified the envelope before anything was sent`);
-          const hash = pendingRegistrations.current.get(chain.chainId) ?? await submit(plan.body, chain);
-          pendingRegistrations.current.set(chain.chainId, hash);
+          let hash = pendingRegistrations.current.get(chain.chainId);
+          if (!hash) {
+            const now = (await getClient(chain).getBlock()).timestamp;
+            const plan = await planRegistration({
+              mandate, signature, chain, account: deployment.mandateAccount, owner: address, now,
+            });
+            if (!plan.verification.valid) throw new Error(`the SDK rejected the envelope: ${plan.verification.message}`);
+            log('info', `${chain.label}: the SDK verified the envelope before anything was sent`);
+            hash = await submit(plan.body, chain);
+            pendingRegistrations.current.set(chain.chainId, hash);
+          }
           log('info', `${chain.label}: registration submitted, waiting for receipt`, { hash, chainId: chain.chainId });
-          const receipt = await getClient(chain).waitForTransactionReceipt({ hash });
+          const receipt = await registrationReceipt(getClient(chain), hash);
+          if (!receipt) {
+            setRegistrations(previous => ({ ...previous, [chain.chainId]: 'still pending / check again' }));
+            log('warn', `${chain.label}: confirmation timed out; registration may still be pending. Retry checks the existing transaction without submitting again.`, { hash, chainId: chain.chainId });
+            continue;
+          }
           pendingRegistrations.current.delete(chain.chainId);
           if (receipt.status !== 'success') throw new Error('Registration reverted');
           setRegistrations(previous => ({ ...previous, [chain.chainId]: 'confirmed' }));
@@ -419,7 +436,7 @@ export function DemoProvider({ children }: { children: ReactNode }) {
       }
       await refreshViews();
     });
-  }, [address, deploymentFor, getClient, keyStore, log, mandate, refreshViews, run, selectedChains, signature, submit]);
+  }, [address, deploymentFor, getClient, keyStore, log, mandate, refreshViews, run, selectedChains, signature, submissionMode, submit]);
 
   const update = useCallback((field: keyof DemoForm, value: string | number) => {
     setForm(previous => ({ ...previous, [field]: value }));
@@ -449,7 +466,7 @@ export function DemoProvider({ children }: { children: ReactNode }) {
       });
       log('info', `${chain.label}: transfer preflight — account ${deployment.mandateAccount}, session ${key.address}, mandate ${mandate.nonce} used=${onChain.mandateUsed}, active=${onChain.session.active}`);
       if (!onChain.mandateUsed) {
-        throw new Error(`This mandate is not registered on ${chain.label}. Sign once, then use “Register / retry remaining chains via MetaMask” and wait for its confirmed receipt before sending.`);
+        throw new Error(`This mandate is not registered on ${chain.label}. Use “Register / retry remaining chains” and wait for its confirmed receipt before sending. Relayer Mode submits without a MetaMask transaction prompt.`);
       }
       if (!onChain.session.active) {
         throw new Error(`The current browser session key (${key.address}) is inactive on ${chain.label}. It was revoked, or this browser key is not the key in the registered mandate. Generate a new key, sign a new mandate, and register it on this chain.`);
@@ -482,10 +499,12 @@ export function DemoProvider({ children }: { children: ReactNode }) {
       log('info', `${chain.label}: session transfer submitted, waiting for receipt`, { hash, chainId: chain.chainId });
       const receipt = await client.waitForTransactionReceipt({ hash });
       if (receipt.status !== 'success') throw new Error('Transfer reverted; no spend was recorded');
-      const confirmed = await client.getBlock({ blockNumber: receipt.blockNumber });
-      tracker.record(amount, confirmed.timestamp);
       lastOperations.current.set(chain.chainId, plan.body);
       log('ok', `${chain.label}: confirmed ${eth(amount)} ETH transfer, authorized by the session key`, { hash, chainId: chain.chainId });
+      const sync = await recordConfirmedSpend(client, receipt.blockHash, timestamp => tracker.record(amount, timestamp));
+      if (!sync.synced) {
+        log('warn', `${chain.label}: transfer confirmed; local spending tracker could not update. Do not resend this payment. On-chain spending limits still apply.\n${describeActionError('spending tracker update', sync.error)}`, { hash, chainId: chain.chainId });
+      }
       await refreshViews();
     });
   }, [deploymentFor, form, getClient, keyStore, log, mandate, refreshViews, run, submit]);

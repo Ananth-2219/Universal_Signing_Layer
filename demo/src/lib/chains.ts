@@ -4,7 +4,6 @@ import type { DemoChain } from './usl';
 const anvilA = (process.env.NEXT_PUBLIC_ANVIL_RPC_A ?? '').trim();
 const anvilB = (process.env.NEXT_PUBLIC_ANVIL_RPC_B ?? '').trim();
 const anvilC = (process.env.NEXT_PUBLIC_ANVIL_RPC_C ?? '').trim();
-const relayer = (process.env.NEXT_PUBLIC_RELAYER_URL ?? '').trim();
 
 export const DEMO_CHAINS: readonly DemoChain[] = process.env.NEXT_PUBLIC_NETWORK_MODE === 'local' ? [
   { chainId: 31337, caip2: 'eip155:31337', label: 'Anvil A', rpcUrl: anvilA },
@@ -16,8 +15,8 @@ export const DEMO_CHAINS: readonly DemoChain[] = process.env.NEXT_PUBLIC_NETWORK
   { chainId: 421614, caip2: 'eip155:421614', label: 'Arbitrum Sepolia', rpcUrl: (process.env.NEXT_PUBLIC_ARBITRUM_SEPOLIA_RPC_URL ?? '').trim(), explorer: 'https://sepolia.arbiscan.io' },
 ];
 
-/** The Phase 8 relayer; only this default is used when the variable is unset. */
-export const RELAYER_URL = relayer || 'http://127.0.0.1:8787';
+/** Same-origin gateway; Next.js reads NEXT_PUBLIC_RELAYER_URL on startup. */
+export const RELAYER_URL = '/api/relayer';
 
 export function chainById(chainId: number): DemoChain {
   const found = DEMO_CHAINS.find(candidate => candidate.chainId === chainId);

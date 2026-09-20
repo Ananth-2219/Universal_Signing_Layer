@@ -6,6 +6,7 @@
     "demo"
   ],
   "scripts": {
+    "dev": "npm --workspace demo run dev",
     "test": "node node_modules/vitest/vitest.mjs run --root sdk",
     "typecheck": "node node_modules/typescript/bin/tsc --noEmit -p sdk/tsconfig.json",
     "vectors:regenerate": "node --import tsx sdk/scripts/regen-vector.ts",

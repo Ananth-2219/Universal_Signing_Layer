@@ -5,7 +5,9 @@ import { fileURLToPath } from 'node:url';
 import { createRelayer } from './src/server.js';
 
 const projectRoot = fileURLToPath(new URL('../', import.meta.url));
-const envPath = [resolve(projectRoot, '.env.local'), resolve(projectRoot, '.env')]
+// The documented relayer configuration is root .env. Older local-demo files
+// must not silently replace its testnet RPCs and gas payer.
+const envPath = [resolve(projectRoot, '.env'), resolve(projectRoot, '.env.local')]
   .find(existsSync);
 if (!envPath) {
   throw new Error('Root .env or .env.local is missing. Add RELAYER_PRIVATE_KEY, ANVIL_RPC, and ANVIL_RPC_B.');
@@ -15,20 +17,36 @@ if (config({ path: envPath }).error) {
 }
 
 const key = process.env.RELAYER_PRIVATE_KEY?.trim();
-const a = process.env.ANVIL_RPC?.trim(); const b = process.env.ANVIL_RPC_B?.trim();
-const missing = [
-  !key && 'RELAYER_PRIVATE_KEY', !a && 'ANVIL_RPC', !b && 'ANVIL_RPC_B',
-].filter(Boolean).join(', ');
-if (!key || !a || !b) throw new Error(`Root relayer environment is missing: ${missing}`);
+const local = [
+  { chainId: 31337, variable: 'ANVIL_RPC', rpcUrl: process.env.ANVIL_RPC?.trim() },
+  { chainId: 31338, variable: 'ANVIL_RPC_B', rpcUrl: process.env.ANVIL_RPC_B?.trim() },
+];
+const testnets = [
+  { chainId: 11155111, variable: 'SEPOLIA_RPC_URL', rpcUrl: process.env.SEPOLIA_RPC_URL?.trim() },
+  { chainId: 84532, variable: 'BASE_SEPOLIA_RPC_URL', rpcUrl: process.env.BASE_SEPOLIA_RPC_URL?.trim() },
+  { chainId: 421614, variable: 'ARBITRUM_SEPOLIA_RPC_URL', rpcUrl: process.env.ARBITRUM_SEPOLIA_RPC_URL?.trim() },
+];
+const requestedMode = process.env.RELAYER_NETWORK_MODE?.trim();
+if (requestedMode && requestedMode !== 'local' && requestedMode !== 'testnet') {
+  throw new Error('RELAYER_NETWORK_MODE must be local or testnet.');
+}
+const selected = requestedMode === 'local'
+  ? local
+  : requestedMode === 'testnet' || testnets.every(chain => chain.rpcUrl)
+    ? testnets
+    : local;
+const missing = [!key && 'RELAYER_PRIVATE_KEY', ...selected.filter(chain => !chain.rpcUrl).map(chain => chain.variable)]
+  .filter(Boolean).join(', ');
+if (!key || selected.some(chain => !chain.rpcUrl)) throw new Error(`Root relayer environment is missing: ${missing}`);
 if (!/^0x[\da-fA-F]{64}$/.test(key)) {
   throw new Error('RELAYER_PRIVATE_KEY must be a 32-byte, 0x-prefixed hexadecimal value.');
 }
-for (const [name, value] of [['ANVIL_RPC', a], ['ANVIL_RPC_B', b]] as const) {
+for (const { variable, rpcUrl } of selected) {
   try {
-    const url = new URL(value);
+    const url = new URL(rpcUrl!);
     if (url.protocol !== 'http:' && url.protocol !== 'https:') throw new Error('unsupported protocol');
   } catch {
-    throw new Error(`${name} must be an HTTP(S) URL.`);
+    throw new Error(`${variable} must be an HTTP(S) URL.`);
   }
 }
 function deployed(chainId: number) {
@@ -36,7 +54,10 @@ function deployed(chainId: number) {
   return [record.mandateAccount];
 }
 const app = createRelayer({ privateKey: key as `0x${string}`, chains: [
-  { chainId: 31337, rpcUrl: a, accounts: deployed(31337), gasPriceCap: 100_000_000_000n },
-  { chainId: 31338, rpcUrl: b, accounts: deployed(31338), gasPriceCap: 100_000_000_000n },
+  ...selected.map(chain => ({
+    chainId: chain.chainId, rpcUrl: chain.rpcUrl!, accounts: deployed(chain.chainId), gasPriceCap: 100_000_000_000n,
+  })),
 ] });
-app.server.listen(Number(process.env.RELAYER_PORT ?? 8787));
+app.server.listen(Number(process.env.RELAYER_PORT ?? 8787), () => {
+  console.log(`Relayer ready; config=${envPath === resolve(projectRoot, '.env') ? '.env' : '.env.local'}; chains=${selected.map(chain => chain.chainId).join(',')}; port=${Number(process.env.RELAYER_PORT ?? 8787)}`);
+});

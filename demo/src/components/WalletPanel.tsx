@@ -47,15 +47,15 @@ export function WalletPanel() {
         <label>Submission mode{' '}
           <select value={demo.submissionMode} disabled={disabled}
             onChange={event => demo.setSubmissionMode(event.target.value as 'direct' | 'relayer')}>
-            <option value="direct">Direct Wallet Mode</option>
-            <option value="relayer">Relayer Mode</option>
+            <option value="relayer">Relayer Mode (recommended)</option>
+            <option value="direct">Direct Wallet Mode (manual)</option>
           </select>
         </label>
         {demo.submissionMode === 'relayer' && <Badge tone={demo.relayerUp ? 'ok' : 'err'}>{demo.relayerUp ? 'relayer online' : 'relayer offline'}</Badge>}
         <span className="muted">
           {demo.submissionMode === 'direct'
-            ? 'Direct Wallet Mode: you confirm each transaction in MetaMask and pay gas on each chain. The session key still signs transfers and the contract enforces its limits.'
-            : 'The relayer submits signed calls and pays gas. If unavailable, select Direct Wallet Mode. Failed requests are never automatically resubmitted through another mode.'}
+            ? 'Direct Wallet Mode is a manual fallback: the session key still authorizes transfers, but MetaMask submits each outer transaction and pays gas. Use Relayer Mode to avoid transfer popups.'
+            : 'The session key signs routine transfers locally. The relayer submits the signed call and pays gas, so MetaMask is not asked after mandate signing. Failed requests are never automatically resubmitted through another mode.'}
         </span>
       </div>
     </Panel>

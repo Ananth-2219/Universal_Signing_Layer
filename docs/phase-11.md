@@ -5,8 +5,9 @@ Ethereum Sepolia, Base Sepolia and Arbitrum Sepolia. Local mode supports three A
 One browser-generated session key signs routine native transfers. The owner signs one
 explicit grant-array mandate with separate limits and expiry for each selected chain.
 
-Direct Wallet Mode is the default: the session key authorizes; MetaMask submits and pays gas.
-The preview shows what each grant allows. Registration reports each chain independently,
+Relayer Mode is the default: the session key authorizes and signs routine transfers; the
+relayer submits the signed call and pays gas. Direct Wallet Mode remains a manual fallback
+that opens MetaMask for each outer transaction. The preview shows what each grant allows. Registration reports each chain independently,
 skips already-used mandate IDs on retry, and retains pending transaction hashes in memory.
 Successful transfers and revocation wait for receipts and refresh contract state.
 

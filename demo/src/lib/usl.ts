@@ -220,7 +220,10 @@ function relayerMessage(raw: unknown): string | undefined {
 
 /** POST one request to the Phase 8 relayer; it simulates the exact call before sending. */
 export async function postRelay(input: { relayerUrl: string; fetchImpl: FetchLike; body: RelayBody }): Promise<Hex> {
-  const response = await input.fetchImpl(`${input.relayerUrl.replace(/\/+$/, '')}/relay`, {
+  // Calling input.fetchImpl(...) sets `this` to input. Native browser fetch
+  // rejects that receiver; invoke it as a standalone function instead.
+  const { fetchImpl } = input;
+  const response = await fetchImpl(`${input.relayerUrl.replace(/\/+$/, '')}/relay`, {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
     body: JSON.stringify(input.body),

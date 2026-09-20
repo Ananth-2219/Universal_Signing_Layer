@@ -71,6 +71,7 @@ describe('Phase 10: demo logic against two anvil chains and the real relayer', (
   let mandate: Mandate;
   let signature: Hex;
   let limits: ReturnType<typeof parseLimits>;
+  let ownerSignatureRequests = 0;
   /** One advisory SDK tracker per chain, as the page keeps them per browser session. */
   const trackers = new Map<string, SpendTracker>();
 
@@ -157,7 +158,15 @@ describe('Phase 10: demo logic against two anvil chains and the real relayer', (
       limits,
       now,
     });
-    signature = await signMandateWithWallet(owner, mandate);
+    // Model the only browser-wallet interaction: signing the mandate.  The relayer
+    // tests below must not cause another owner signing or transaction request.
+    signature = await signMandateWithWallet({
+      signTypedData: async typedData => {
+        ownerSignatureRequests++;
+        return owner.signTypedData(typedData);
+      },
+    }, mandate);
+    expect(ownerSignatureRequests).toBe(1);
 
     const relayer = createRelayer({
       privateKey: relayerKey,
@@ -250,6 +259,7 @@ describe('Phase 10: demo logic against two anvil chains and the real relayer', (
       expect(blobs.every(blob => args.envelope.toLowerCase().includes(blob.toLowerCase()))).toBe(true);
       const hash = await postRelay({ relayerUrl, fetchImpl, body: plan.body });
       expect((await node.publicClient.waitForTransactionReceipt({ hash })).status).toBe('success');
+      expect((await node.publicClient.getTransaction({ hash })).type).toBe('eip1559');
       const state = await statusOf(node);
       expect(state.mandateUsed).toBe(true);
       expect(state.session.active).toBe(true);
@@ -274,7 +284,9 @@ describe('Phase 10: demo logic against two anvil chains and the real relayer', (
     expect(plan.policy.decision).toBe('allow');
     // Every number on the wire is a decimal string, exactly as the relayer's parser requires.
     expect(Object.values(plan.body.args).every(value => typeof value === 'string')).toBe(true);
+    const ownerRequestsBeforeRelay = ownerSignatureRequests;
     const hash = await postRelay({ relayerUrl, fetchImpl, body: plan.body });
+    expect(ownerSignatureRequests).toBe(ownerRequestsBeforeRelay);
     const receipt = await node.publicClient.waitForTransactionReceipt({ hash });
     expect(receipt.status).toBe('success');
     const confirmed = await node.publicClient.getBlock({ blockNumber: receipt.blockNumber });

@@ -2,6 +2,7 @@ import { createPublicClient, createWalletClient, encodeFunctionData, http, isAdd
 import { privateKeyToAccount } from 'viem/accounts';
 import { ACCOUNT_ABI } from '../../sdk/src/adapters/evm/abi.js';
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http';
+import { relayFees } from './fees.js';
 
 type Kind = 'register' | 'execute' | 'revoke';
 type Request = { chainId: number; account: Address; kind: Kind; args: unknown };
@@ -57,9 +58,9 @@ export function createRelayer(options: RelayerOptions) {
     const args = argsFor(req.kind, req.args); const data = callFor(req.kind, args);
     const publicClient = createPublicClient({ transport: http(chain.rpcUrl) });
     try { await publicClient.call({ to: req.account, data, account: account.address }); } catch (error) { fail(safeReason(error)); }
-    const gasPrice = await publicClient.getGasPrice(); if (gasPrice > chain.gasPriceCap) fail('gas price exceeds cap');
+    const fees = await relayFees(publicClient, chain.gasPriceCap);
     const wallet = createWalletClient({ account, transport: http(chain.rpcUrl) });
-    return wallet.sendTransaction({ chain: undefined, to: req.account, data, gasPrice });
+    return wallet.sendTransaction({ chain: undefined, to: req.account, data, ...fees });
   }
   const server = createServer(async (req: IncomingMessage, res: ServerResponse) => {
     setLocalDemoCors(req, res);

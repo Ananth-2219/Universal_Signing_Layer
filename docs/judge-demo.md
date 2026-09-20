@@ -1,13 +1,18 @@
 # Judge demo runbook
 
+Connectivity update: browser relayer requests use the website's /api/relayer gateway.
+NEXT_PUBLIC_RELAYER_URL configures its upstream; restart Next.js after changing it.
+The relayer reads root .env first (root .env.local is only a fallback). Run the relayer
+and `npm run dev` in separate terminals. Startup prints the active relayer chain IDs.
+
 ## What this demonstrates
 
 One ERC-7964-style explicit-array mandate signature authorizes a random browser session
 key on three independent account contracts. The key authorizes routine native ETH
-transfers. In Direct Wallet Mode, MetaMask confirms every outer transaction and the
-user pays gas; this does not mean one wallet interaction for every future transaction.
-The owner key stays in MetaMask and the session key stays in memory. No new server
-custody or signing service is introduced. Contract interfaces and signed schemas are unchanged.
+transfers. In Relayer Mode, the browser session key signs routine operations and the
+relayer submits the outer transaction and pays gas. MetaMask signs the mandate once and
+remains necessary for owner-only revocation. The owner key stays in MetaMask and the
+session key stays in memory. Contract interfaces and signed schemas are unchanged.
 
 ## Public testnet setup
 
@@ -24,13 +29,18 @@ Fill these entries in `demo/.env.local` locally (never commit RPC values):
 - `NEXT_PUBLIC_SEPOLIA_RPC_URL` for Ethereum Sepolia, chain 11155111.
 - `NEXT_PUBLIC_BASE_SEPOLIA_RPC_URL` for Base Sepolia, chain 84532.
 - `NEXT_PUBLIC_ARBITRUM_SEPOLIA_RPC_URL` for Arbitrum Sepolia, chain 421614.
-- `NEXT_PUBLIC_SUBMISSION_MODE`: `direct` (also the default).
+- `NEXT_PUBLIC_SUBMISSION_MODE`: `relayer` (also the default).
 - Leave `NEXT_PUBLIC_NETWORK_MODE` empty for the three public testnets.
 
 Browser RPC configuration is public to the browser: use provider credentials restricted
 to your demo's origin. Fund the connected MetaMask owner with test ETH on every chain.
 Each account contract also needs test ETH: wallet gas funds and account spending funds
 are separate balances.
+
+For routine transfers without MetaMask popups, set root `.env` `RELAYER_PRIVATE_KEY` to a
+throwaway testnet-only relayer key and fund that address with test ETH on every chain. It is
+the relayer's gas payer, never the owner or session key. Start `npm run relayer` alongside
+the demo after deploying the accounts.
 
 Deploy accounts BEFORE signing. Set root `.env` variables `OWNER_ADDRESS` to the
 MetaMask public address and `SEPOLIA_RPC_URL`, `BASE_SEPOLIA_RPC_URL`,
@@ -45,6 +55,7 @@ set +a
 forge script contracts/script/DeployMandateAccount.s.sol:DeployMandateAccount --account testnet-deployer --rpc-url "$SEPOLIA_RPC_URL" --broadcast
 forge script contracts/script/DeployMandateAccount.s.sol:DeployMandateAccount --account testnet-deployer --rpc-url "$BASE_SEPOLIA_RPC_URL" --broadcast
 forge script contracts/script/DeployMandateAccount.s.sol:DeployMandateAccount --account testnet-deployer --rpc-url "$ARBITRUM_SEPOLIA_RPC_URL" --broadcast
+npm run relayer
 npm run demo
 ```
 
@@ -64,10 +75,9 @@ Production preview: `npm run demo:build`, then `npm --workspace demo run start`.
    **3600 seconds**, and expiry to **60 minutes**. Values may differ per chain.
 4. Generate the session key. Review each chain, account, limit and expiry in the preview.
 5. Sign the mandate once in MetaMask. Keep its chainless domain unchanged.
-6. Register the three grants. Approve network switches and gas-paying transactions.
-   To demonstrate partial failure, reject one prompt, let the others finish, then click
-   Register / retry remaining chains. Confirmed mandate IDs are skipped; a known pending
-   hash is checked again instead of sending another transaction.
+6. Register the three grants. The relayer submits each permissionless registration; there
+   are no network-switch or transaction prompts after the mandate signature. Confirmed
+   mandate IDs are skipped and a known pending hash is checked again instead of resent.
 7. Choose a chain and set the recipient to your owner address and amount to **0.0001 ETH**.
    In Security Demo, run the valid small action: this really transfers test ETH and
    consumes the budget. Explain that a compromised session signer can also do this.
@@ -88,7 +98,7 @@ the same in-memory signer without exporting its private key.
 Reload loses the session key. Destroying it does not revoke on-chain authority. Revocation
 is per chain. Budgets use fixed windows, so a boundary burst can approach two budgets.
 
-## Local verification and optional relayer
+## Local verification and relayer
 
 The integration suite starts isolated Anvil nodes, including three nodes with the exact
 public-testnet chain IDs, and shuts down only those child processes. It deploys and funds
@@ -111,9 +121,10 @@ For a manual local demo, set `NEXT_PUBLIC_NETWORK_MODE=local`, configure
 Deploy/fund an account on each using the existing Phase 6 script and a local test-only
 sender. The silent flag avoids printing Anvil's development keys.
 
-Relayer files and tests are preserved. The existing `npm run relayer` launcher remains
-configured for the original two local chains; the public-testnet judge route is Direct
-Wallet Mode. Select Relayer Mode only when its configured server supports your chains.
+Relayer files and tests are preserved. `npm run relayer` selects the configured three public
+testnets when all their root RPC variables are set; use `RELAYER_NETWORK_MODE=local` for its
+original two-Anvil configuration. Direct Wallet Mode is a manual fallback that asks MetaMask
+to submit and pay for every outer transaction.
 
 ## Verified scope and remaining setup
 

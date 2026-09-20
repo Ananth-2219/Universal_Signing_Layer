@@ -5,8 +5,10 @@ import { ensureWalletChain, walletChainFor, type DemoChain, type RelayBody } fro
 export type SubmissionMode = 'direct' | 'relayer';
 
 export function parseSubmissionMode(value?: string): SubmissionMode {
-  if (!value?.trim() || value === 'direct') return 'direct';
-  if (value === 'relayer') return 'relayer';
+  // Relaying is the normal session-key experience: only the browser session key
+  // signs routine operations, while the relayer submits the outer transaction.
+  if (!value?.trim() || value === 'relayer') return 'relayer';
+  if (value === 'direct') return 'direct';
   throw new Error('NEXT_PUBLIC_SUBMISSION_MODE must be direct or relayer');
 }
 

@@ -70,8 +70,8 @@ describe('Direct Wallet Mode without a relayer', () => {
   }, 30_000);
   afterAll(() => { session.destroy(); for (const child of children) child.kill('SIGTERM'); });
 
-  it('defaults to direct with an explicit relayer configuration option', () => {
-    expect(parseSubmissionMode()).toBe('direct');
+  it('defaults to relayer, while retaining an explicit manual direct fallback', () => {
+    expect(parseSubmissionMode()).toBe('relayer');
     expect(parseSubmissionMode('direct')).toBe('direct');
     expect(parseSubmissionMode('relayer')).toBe('relayer');
     expect(() => parseSubmissionMode('other')).toThrow();
